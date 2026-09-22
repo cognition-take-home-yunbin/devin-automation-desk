@@ -31,14 +31,33 @@ description: How to run and end-to-end test the Devin Repair Desk dashboard in s
 
 ## Dashboard under test
 
-- Header: mode badge, repo, PAUSED badge, refresh/stale text. Metrics row: active tasks, needs intervention, verified PRs, merged PRs, observed ACUs.
+- Header: mode badge, repo, PAUSED badge, `SCAN STALE {age}s` badge, refresh/stale text. Metrics row: active tasks, needs intervention, verified PRs, merged PRs, observed ACUs, ACU held (live reservations), daily admission left (sub: project left N).
 - Task rows: issue #+title+SYNTHETIC tag, approver, 4 state chips (execution/validation/review/disposition), elapsed, ACUs, PR/session links. Click a row → detail drawer (issue snapshot, attempts with correlation tags, evidence, audit timeline). Escape or ✕ or backdrop closes.
 - "Filter by state" dropdown filters rows across all 4 dimensions.
 - needs_input evidence carries the scripted question (e.g. "Which baseline SHA should I use?").
+- Row Links column shows a `slack` anchor when `slack_link` is set; drawer has a `Cleanup` chip (pending/kept/terminated) + `Slack` field.
+
+## Operator CLI flows (milestone B)
+
+- All under `docker compose exec -T app python -m app.cli …`; they enqueue jobs the worker executes (~1s).
+- `scan now` → `scan_requested` audit. `message TASK_ID TEXT` → needs a live session + execution not stopped/failed; audits `message_sent` + note evidence. `slack-link TASK_ID URL` → `slack_link_recorded` audit.
+- `stop TASK_ID` → stopped/cancelled/Cleanup=terminated + termination evidence; on agent_finished/delivered it's `stop_skipped` ("nothing to terminate") and the outcome is preserved. Stopping a task that holds the session slot frees it for queued dispatches. Stop consumes the held 20-ACU reservation at FULL amount (not observed spend) — daily-admission-left drops by 20.
+- `retry TASK_ID --reason R` → only from failed/stopped/agent_finished with no pr_number and no live session; requeues, disposition→active, `operator_retry`+`retry_queued` audits, fresh attempt+session. Deterministic verified-retry demo: stop a QUEUED task → retry it (stays queued behind the slot) → stop the needs_input task → slot frees → retried task dispatches → delivered.
+- `tasks.cleanup_state` is first-writer-wins: the monitor only writes 'kept'/'terminated' while it's 'pending', so a task stopped-then-retried keeps 'terminated' on its summary chip even though the new session's cleanup_record is 'kept'.
+
+## Review-blocked scenarios & task-ID mapping
+
+- `approval-withdrawn` (#109) and `snapshot-changed` (#110) seed a task with an ACCEPTED approval receipt, then flip live issue state; dispatch re-verifies and lands execution=queued/disposition=blocked with a `dispatch_review_blocked` audit, NO session (devin_session_id NULL), receipt→rejected.
+- CLI takes DB task ids, not issue numbers. Get them from `curl -s http://127.0.0.1:8000/api/tasks` (task 1≈issue 101, created in launch order) or the drawer aria-label "Task N detail".
+
+## Forcing SCAN STALE deterministically
+
+- Badge shows when `scan_age > 3×SCAN_INTERVAL_SECONDS` (check `.env` — it may differ from `.env.example`'s 60s; e.g. 15s → 45s threshold). `cli pause` does NOT gate scans, and container stop kills the API (stale-data instead). Backdating `control.last_scan_at` alone self-heals on the next successful scan.
+- Working lever: inject a sustained error via the app's own fault table — `INSERT INTO sim_call_scripts (operation, remaining, error) VALUES ('github.list_candidate_issues', 9999, 'rate_limited')` inside the container (sqlite at `/data/repairdesk.sqlite`) + backdate `last_scan_at` → scans requeue forever while the API serves → badge persists with counting age. `DELETE` the row + `cli scan now` → badge clears.
 
 ## Known cosmetic quirk
 
-- Task #101's audit timeline can contain `job_retry — verify_task: InvalidTransition: validation: pr_found -> verified is not allowed`: the verify job raced the pr_found→checks_pending transition and retried harmlessly. End state is correct; worth a look if strict audit cleanliness matters.
+- Older builds could show `job_retry — verify_task: InvalidTransition: pr_found -> verified` in a task's audit (verify job raced the pr_found→checks_pending transition). Fixed on the milestone-B branch — a clean timeline should now show pr_found → checks_pending → verified with no retry. If it reappears, that fix regressed.
 
 ## Devin Secrets Needed
 
