@@ -39,6 +39,32 @@ def get_conn(request: Request) -> Iterator[sqlite3.Connection]:
 Conn = Depends(get_conn)
 
 
+def _utc_day_start() -> float:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).timestamp()
+
+
+def _consumed_since(
+    conn: sqlite3.Connection, mode: str, since: float | None
+) -> float:
+    if since is None:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS a FROM budget_reservations "
+            "WHERE mode = ? AND status = 'consumed'",
+            (mode,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS a FROM budget_reservations "
+            "WHERE mode = ? AND status = 'consumed' AND resolved_at >= ?",
+            (mode, since),
+        ).fetchone()
+    return float(row["a"])
+
+
 def _task_summary(row: sqlite3.Row, conn: sqlite3.Connection) -> TaskSummary:
     acu = conn.execute(
         "SELECT MAX(acu_used) AS a FROM attempts WHERE task_id = ?",
@@ -58,6 +84,8 @@ def _task_summary(row: sqlite3.Row, conn: sqlite3.Connection) -> TaskSummary:
         approval_actor=row["approval_actor"],
         pr_url=row["pr_url"],
         devin_session_url=row["devin_session_url"],
+        slack_link=row["slack_link"],
+        cleanup_state=row["cleanup_state"],
         head_sha=row["head_sha"],
         base_sha=row["base_sha"],
         acu_used=acu,
@@ -90,14 +118,28 @@ def overview(request: Request, conn: sqlite3.Connection = Conn) -> OverviewOut:
                WHERE mode = ? GROUP BY task_id)""",
         (s.app_mode,),
     ).fetchone()
+    # Scanner-downtime visibility: freshness = last_scan_at vs the schedule.
+    # The periodic trigger makes no immediate-delivery promise, so "stale"
+    # means clearly past-due (3x interval), not merely late.
+    last_scan = control["last_scan_at"]
+    scan_age = (db.now() - last_scan) if last_scan else None
+    scan_fresh = scan_age is not None and scan_age < 3 * s.scan_interval_seconds
+    budget_held = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) AS a FROM budget_reservations "
+        "WHERE mode = ? AND status = 'held'",
+        (s.app_mode,),
+    ).fetchone()["a"]
     return OverviewOut(
         mode=s.app_mode,
         paused=bool(control["paused"]),
         repo=s.github_repo or "(unconfigured)",
-        last_scan_at=control["last_scan_at"],
+        last_scan_at=last_scan,
         last_publish_at=control["last_publish_at"],
+        scan_age_seconds=scan_age,
+        scan_fresh=scan_fresh,
         generated_at=db.now(),
         metrics={
+            "budget_held_acu": float(budget_held),
             "tasks_total": len(rows),
             "active": count(lambda t: t["disposition"] == "active"),
             "needs_intervention": count(
@@ -109,6 +151,18 @@ def overview(request: Request, conn: sqlite3.Connection = Conn) -> OverviewOut:
             "observed_acus": acu["total"],
             "acus_scope": "cumulative ACUs for included sessions",
             "sessions_seen": acu["n"],
+            "daily_admission_remaining": round(
+                s.daily_admission_acu_limit
+                - float(budget_held)
+                - _consumed_since(conn, s.app_mode, _utc_day_start()),
+                2,
+            ),
+            "project_admission_remaining": round(
+                s.project_admission_acu_limit
+                - float(budget_held)
+                - _consumed_since(conn, s.app_mode, None),
+                2,
+            ),
         },
         limits={
             "max_active_sessions": s.max_active_sessions,

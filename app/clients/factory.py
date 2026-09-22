@@ -11,9 +11,9 @@ from dataclasses import dataclass
 
 from ..config import Settings
 from .base import DevinClient, GitHubClient, ReportSink
-from .devin import LiveDevinClient, LiveReportSink
+from .devin import LiveDevinClient
 from .fakes import FakeDevinClient, FakeGitHubClient, FakeReportSink
-from .github import LiveGitHubClient
+from .github import LiveGitHubClient, LiveReportSink
 
 
 @dataclass

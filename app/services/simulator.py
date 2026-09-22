@@ -25,6 +25,8 @@ SCENARIOS = (
     "throttled",
     "stale-checks",
     "report-failure",
+    "approval-withdrawn",
+    "snapshot-changed",
 )
 
 # Fixed, disjoint issue numbers keep repeated scenario runs idempotent.
@@ -37,6 +39,8 @@ _ISSUE = {
     "throttled": 105,
     "stale-checks": 106,
     "report-failure": 107,
+    "approval-withdrawn": 109,
+    "snapshot-changed": 110,
 }
 
 WORKFLOW = "pilot-validation"
@@ -53,15 +57,19 @@ def _seed_issue(
     approved_by: str | None,
     approval_label: str,
     session_script: dict | None = None,
+    is_pull_request: bool = False,
+    body: str = "SYNTHETIC issue body — simulation fixture, not a real report.",
 ) -> None:
     conn.execute(
         """INSERT OR IGNORE INTO sim_issues
-           (repo, number, title, state, labels_json, body, session_script_json)
-           VALUES (?, ?, ?, 'open', ?, ?, ?)""",
+           (repo, number, title, state, labels_json, body, is_pull_request,
+            session_script_json)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?)""",
         (
             repo, number, title,
             db.dumps(labels),
-            "SYNTHETIC issue body — simulation fixture, not a real report.",
+            body,
+            1 if is_pull_request else 0,
             db.dumps(session_script) if session_script else None,
         ),
     )
@@ -73,6 +81,83 @@ def _seed_issue(
             (repo, number, f"sim-evt-{number}-approve", approval_label,
              approved_by, db.now()),
         )
+
+
+def _seed_label_event(
+    conn: sqlite3.Connection,
+    repo: str,
+    number: int,
+    *,
+    event_id: str,
+    event: str,
+    label: str,
+    actor: str,
+) -> None:
+    conn.execute(
+        """INSERT OR IGNORE INTO sim_issue_events
+           (repo, issue_number, event_id, event, label, actor, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (repo, number, event_id, event, label, actor, db.now()),
+    )
+
+
+def _seed_task(
+    conn: sqlite3.Connection,
+    *,
+    repo: str,
+    number: int,
+    title: str,
+    snapshot_body: str,
+    labels: list[str],
+    approver: str,
+) -> int:
+    """Pre-seed an accepted task + approval receipt with a *frozen* snapshot
+    — used by scenarios that need intake state that predates a mutation."""
+    snapshot = {
+        "title": title,
+        "body": snapshot_body,
+        "labels": labels,
+        "state": "open",
+        "url": f"https://github.example.invalid/{repo}/issues/{number}",
+    }
+    from . import scanner
+
+    class _SnapIssue:
+        def __init__(self):
+            self.repo = repo
+            self.number = number
+            self.title = title
+            self.body = snapshot_body
+            self.labels = labels
+            self.state = "open"
+
+    snapshot_hash = scanner.issue_snapshot_hash(_SnapIssue())
+    ts = db.now()
+    cur = conn.execute(
+        """INSERT OR IGNORE INTO tasks
+           (mode, repo, issue_number, issue_title, issue_url,
+            issue_snapshot_hash, issue_snapshot_json, approval_actor,
+            accepted_at, synthetic, created_at, updated_at)
+           VALUES ('simulation', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+        (
+            repo, number, title, snapshot["url"], snapshot_hash,
+            db.dumps(snapshot), approver, ts, ts, ts,
+        ),
+    )
+    task_id = conn.execute(
+        "SELECT id FROM tasks WHERE mode = 'simulation' AND repo = ? "
+        "AND issue_number = ?",
+        (repo, number),
+    ).fetchone()["id"]
+    conn.execute(
+        """INSERT OR IGNORE INTO approval_receipts
+           (mode, task_id, repo, issue_number, label_event_id, actor,
+            observed_at, issue_snapshot_hash, processing_state, payload_json)
+           VALUES ('simulation', ?, ?, ?, ?, ?, ?, ?, 'accepted', '{}')""",
+        (task_id, repo, number, f"sim-evt-{number}-approve", approver, ts,
+         snapshot_hash),
+    )
+    return int(task_id)
 
 
 def _seed_checks(
@@ -226,6 +311,65 @@ def seed_scenario(
             notes.append(
                 "report publication fails 3x; failed publication records are "
                 "kept, the job retries, then succeeds"
+            )
+
+        elif scenario == "approval-withdrawn":
+            _seed_issue(
+                conn, repo, n,
+                "Bar chart ignores sort by series name",
+                labels=[cand],  # approval label no longer present
+                approved_by=approver, approval_label=appr,
+            )
+            _seed_label_event(
+                conn, repo, n, event_id=f"sim-evt-{n}-withdraw",
+                event="unlabeled", label=appr, actor=approver,
+            )
+            task_id = _seed_task(
+                conn, repo=repo, number=n,
+                title="Bar chart ignores sort by series name",
+                snapshot_body=(
+                    "SYNTHETIC issue body — simulation fixture, "
+                    "not a real report."
+                ),
+                labels=[cand, appr], approver=approver,
+            )
+            jobs.enqueue(
+                conn, "dispatch_task", {"task_id": task_id},
+                mode="simulation",
+                dedup_key=f"dispatch:simulation:{repo}:{n}",
+            )
+            notes.append(
+                "approval was withdrawn before dispatch; the task must stop "
+                "for review instead of creating a session"
+            )
+
+        elif scenario == "snapshot-changed":
+            _seed_issue(
+                conn, repo, n,
+                "Pivot table shows wrong totals for filtered column",
+                labels=[cand, appr], approved_by=approver, approval_label=appr,
+                body=(
+                    "SYNTHETIC — the reporter edited the body after approval "
+                    "to broaden the scope."
+                ),
+            )
+            task_id = _seed_task(
+                conn, repo=repo, number=n,
+                title="Pivot table shows wrong totals for filtered column",
+                snapshot_body=(
+                    "SYNTHETIC issue body — simulation fixture, "
+                    "not a real report."
+                ),
+                labels=[cand, appr], approver=approver,
+            )
+            jobs.enqueue(
+                conn, "dispatch_task", {"task_id": task_id},
+                mode="simulation",
+                dedup_key=f"dispatch:simulation:{repo}:{n}",
+            )
+            notes.append(
+                "issue content changed after acceptance; dispatch must stop "
+                "for review"
             )
 
         # Scan jobs dedupe at the task level, so a plain enqueue is correct —

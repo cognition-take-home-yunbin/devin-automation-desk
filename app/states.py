@@ -46,8 +46,9 @@ DIMENSIONS = ("execution", "validation", "review", "disposition")
 ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
     "execution": {
         "queued": ("dispatching", "stop_requested"),
-        "dispatching": ("working", "creation_unknown", "failed"),
-        "creation_unknown": ("working", "failed", "queued"),
+        "dispatching": ("working", "creation_unknown", "failed", "queued",
+                        "stop_requested"),
+        "creation_unknown": ("working", "failed", "queued", "stop_requested"),
         "working": (
             "needs_input",
             "approval_required",
@@ -55,14 +56,16 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             "suspended",
             "failed",
             "stop_requested",
+            "stopped",
         ),
-        "needs_input": ("working", "failed", "stop_requested"),
-        "approval_required": ("working", "failed", "stop_requested"),
-        "agent_finished": (),
-        "suspended": ("working", "failed"),
+        "needs_input": ("working", "failed", "stop_requested", "stopped"),
+        "approval_required": ("working", "failed", "stop_requested",
+                              "stopped"),
+        "agent_finished": ("queued",),
+        "suspended": ("working", "failed", "stop_requested", "stopped"),
         "failed": ("queued",),
         "stop_requested": ("stopped",),
-        "stopped": (),
+        "stopped": ("queued",),
     },
     "validation": {
         "no_pr": ("pr_found", "unknown"),
@@ -90,7 +93,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         "blocked": ("active", "failed", "cancelled"),
         "delivered": (),
         "failed": ("active", "cancelled"),
-        "cancelled": (),
+        "cancelled": ("active",),
     },
 }
 

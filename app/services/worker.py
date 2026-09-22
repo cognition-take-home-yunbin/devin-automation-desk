@@ -28,7 +28,15 @@ from ..config import Settings
 from ..clients.base import RateLimited
 from ..transitions import audit, is_paused
 from .context import ServiceContext
-from . import dispatch, jobs, monitor, report_source, scanner, verification
+from . import (
+    dispatch,
+    jobs,
+    monitor,
+    operator,
+    report_source,
+    scanner,
+    verification,
+)
 
 log = logging.getLogger("repairdesk.worker")
 
@@ -39,6 +47,10 @@ HANDLERS = {
     "poll_session": monitor.handle_poll,
     "verify_task": verification.handle_verify,
     "publish_report": report_source.handle_publish,
+    "send_message": operator.handle_send_message,
+    "stop_task": operator.handle_stop_task,
+    "retry_task": operator.handle_retry_task,
+    "reconcile_task": operator.handle_reconcile_task,
 }
 
 JOB_KINDS = tuple(HANDLERS)

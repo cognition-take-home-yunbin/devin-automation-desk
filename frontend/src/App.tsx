@@ -13,6 +13,8 @@ const SCENARIOS = [
   "throttled",
   "stale-checks",
   "report-failure",
+  "approval-withdrawn",
+  "snapshot-changed",
 ];
 
 export default function App() {
@@ -79,6 +81,13 @@ export default function App() {
           </span>
         )}
         {overview?.paused && <span className="badge paused">PAUSED</span>}
+        {overview && !overview.scan_fresh && (
+          <span className="badge stale-scan">
+            SCAN STALE
+            {overview.scan_age_seconds != null &&
+              ` ${Math.round(overview.scan_age_seconds)}s`}
+          </span>
+        )}
         <span className="repo">{overview?.repo ?? "…"}</span>
         <span className="spacer" />
         <span className={`refresh ${stale ? "stale" : ""}`}>
@@ -103,6 +112,16 @@ export default function App() {
               label="observed ACUs"
               value={overview.metrics.observed_acus}
               sub={String(overview.metrics.acus_scope)}
+            />
+            <Metric
+              label="ACU held"
+              value={overview.metrics.budget_held_acu}
+              sub="active reservations"
+            />
+            <Metric
+              label="daily admission left"
+              value={overview.metrics.daily_admission_remaining}
+              sub={`project left ${overview.metrics.project_admission_remaining}`}
             />
           </section>
         )}
@@ -187,6 +206,7 @@ export default function App() {
                       {t.devin_session_url && (
                         <a href={t.devin_session_url}>session</a>
                       )}
+                      {t.slack_link && <a href={t.slack_link}>slack</a>}
                     </td>
                   </tr>
                 ))}

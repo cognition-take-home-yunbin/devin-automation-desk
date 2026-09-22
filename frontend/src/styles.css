@@ -30,6 +30,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 48px; }
 .badge.simulation { background: #fff4e5; color: var(--warn); border-color: #f5d9ae; }
 .badge.live { background: #e8f5ec; color: var(--ok); border-color: #b7e2c4; }
 .badge.paused { background: #fdecec; color: var(--bad); border-color: #f3c1bd; }
+.badge.stale-scan { background: #fdecec; color: var(--bad); border-color: #f3c1bd; }
 .refresh { color: var(--muted); font-size: 12px; }
 .refresh.stale { color: var(--bad); font-weight: 600; }
 

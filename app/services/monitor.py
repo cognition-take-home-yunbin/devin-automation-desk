@@ -13,7 +13,8 @@ from .. import db
 from ..clients.base import RateLimited
 from ..transitions import add_evidence, audit, get_task, transition_task
 from .context import ServiceContext
-from . import jobs
+from . import budget, jobs
+from .operator import _record_cleanup
 
 _STATUS_TO_EXECUTION = {
     "working": "working",
@@ -85,17 +86,53 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
             )
         return
 
-    if mapped in ("failed", "stopped"):
+    if mapped == "stopped":
+        # Remote termination (operator stop via API/webapp). The task outcome
+        # is preserved — a delivered task stays delivered; an active one is
+        # honestly cancelled.
+        budget.consume(conn, task["id"], session.acu_used)
+        transition_task(conn, task, "execution", "stopped",
+                        detail=session.status_detail or "session terminated")
+        task = get_task(conn, task["id"])
+        if task["disposition"] == "active":
+            transition_task(conn, task, "disposition", "cancelled",
+                            detail="session terminated remotely")
+        conn.execute(
+            "UPDATE tasks SET cleanup_state = 'terminated', updated_at = ? "
+            "WHERE id = ? AND cleanup_state = 'pending'",
+            (db.now(), task["id"]),
+        )
+        _record_cleanup(
+            conn, task, "terminated", actor="remote",
+            session_id=session.session_id,
+            detail="session terminated outside the desk",
+        )
+        return
+
+    if mapped == "failed":
+        budget.consume(conn, task["id"], session.acu_used)
         transition_task(conn, task, "execution", "failed",
                         detail=session.status_detail or session.status)
         transition_task(conn, get_task(conn, task["id"]), "disposition",
                         "failed")
         conn.execute("UPDATE tasks SET last_error = ? WHERE id = ?",
                      (session.status_detail or "session failed", task["id"]))
+        conn.execute(
+            "UPDATE tasks SET cleanup_state = 'terminated', updated_at = ? "
+            "WHERE id = ? AND cleanup_state = 'pending'",
+            (db.now(), task["id"]),
+        )
+        _record_cleanup(
+            conn, task, "terminated", actor="provider",
+            session_id=session.session_id,
+            detail="session ended in a failed state",
+        )
         return
 
-    # agent_finished — record the PR and hand off to verification.
+    # agent_finished — settle the reservation with observed ACU spend,
+    # record the PR and hand off to verification.
     with db.transaction(conn):
+        budget.consume(conn, task["id"], session.acu_used)
         if session.pr_url:
             conn.execute(
                 """UPDATE tasks SET pr_number = ?, pr_url = ?, head_sha = ?,
@@ -106,6 +143,18 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
         task = get_task(conn, task["id"])
         transition_task(conn, task, "execution", "agent_finished",
                         detail="session reported finished")
+        # Handoff policy: keep the session available — the planned native
+        # Slack conversation and the verification update still need it.
+        conn.execute(
+            "UPDATE tasks SET cleanup_state = 'kept', updated_at = ? "
+            "WHERE id = ? AND cleanup_state = 'pending'",
+            (db.now(), task["id"]),
+        )
+        _record_cleanup(
+            conn, task, "kept", actor="system",
+            session_id=session.session_id,
+            detail="retained for native conversation + verification update",
+        )
         if session.pr_number:
             transition_task(conn, task, "validation", "pr_found",
                             detail=f"PR #{session.pr_number}")
