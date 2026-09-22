@@ -152,7 +152,11 @@ class LiveGitHubClient:
             number=int(pr["number"]),
             url=pr.get("html_url") or "",
             base_branch=(pr.get("base") or {}).get("ref") or "",
+            base_repo=((pr.get("base") or {}).get("repo") or {})
+            .get("full_name") or "",
             head_sha=(pr.get("head") or {}).get("sha") or "",
+            head_repo=((pr.get("head") or {}).get("repo") or {})
+            .get("full_name") or "",
             state=pr.get("state") or "open",
         )
 

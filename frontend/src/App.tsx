@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import type { Overview, Report, TaskDetail, TaskSummary } from "./types";
 import TaskDrawer from "./components/TaskDrawer";
-import { fmtAgo, fmtTime, stateChipClass } from "./util";
+import { fmtAgo, fmtTime, stateChipClass, stateIcon } from "./util";
 
 const SCENARIOS = [
   "happy-path",
@@ -25,6 +25,7 @@ export default function App() {
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
@@ -46,6 +47,8 @@ export default function App() {
       // Keep prior data with a stale indicator rather than zeroing out.
       setStale(true);
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }, [selected]);
 
@@ -88,9 +91,14 @@ export default function App() {
               ` ${Math.round(overview.scan_age_seconds)}s`}
           </span>
         )}
-        <span className="repo">{overview?.repo ?? "…"}</span>
+        <span className="repo" title="Configured repository">
+          {overview?.repo ?? "…"}
+        </span>
         <span className="spacer" />
-        <span className={`refresh ${stale ? "stale" : ""}`}>
+        <span
+          className={`refresh ${stale ? "stale" : ""}`}
+          role={stale ? "alert" : undefined}
+        >
           {stale
             ? `stale — last good refresh retained (${error})`
             : overview
@@ -98,15 +106,31 @@ export default function App() {
             : "connecting…"}
         </span>
       </header>
-      <main>
+      <main className={stale ? "content-stale" : ""}>
+        {loading && !overview && (
+          <div className="empty" role="status">
+            Loading dashboard…
+          </div>
+        )}
+        {stale && !overview && (
+          <div className="error" role="alert">
+            Could not reach the API — {error ?? "unknown error"}
+          </div>
+        )}
         {overview && (
           <section className="metrics" aria-label="metrics">
             <Metric label="active tasks" value={overview.metrics.active} />
+            <Metric label="blocked" value={overview.metrics.blocked} />
             <Metric
               label="needs intervention"
               value={overview.metrics.needs_intervention}
             />
             <Metric label="verified PRs" value={overview.metrics.verified_prs} />
+            <Metric
+              label="manual verifies"
+              value={overview.metrics.manually_verified}
+              sub="operator evidence — not CI"
+            />
             <Metric label="merged PRs" value={overview.metrics.merged_prs} />
             <Metric
               label="observed ACUs"
@@ -147,7 +171,7 @@ export default function App() {
                 : "No approved issues discovered yet."}
             </div>
           ) : (
-            <table>
+            <table aria-label="repair tasks">
               <thead>
                 <tr>
                   <th>Issue</th>
@@ -166,8 +190,14 @@ export default function App() {
                   <tr
                     key={t.id}
                     onClick={() => openTask(t.id)}
-                    onKeyDown={(e) => e.key === "Enter" && openTask(t.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openTask(t.id);
+                      }
+                    }}
                     tabIndex={0}
+                    aria-label={`Task ${t.id}: issue ${t.issue_number} — ${t.issue_title}`}
                   >
                     <td>
                       <div className="issue">
@@ -180,24 +210,16 @@ export default function App() {
                     </td>
                     <td>{t.approval_actor ?? "—"}</td>
                     <td>
-                      <span className={`chip ${stateChipClass(t.execution)}`}>
-                        {t.execution}
-                      </span>
+                      <StateChip state={t.execution} />
                     </td>
                     <td>
-                      <span className={`chip ${stateChipClass(t.validation)}`}>
-                        {t.validation}
-                      </span>
+                      <StateChip state={t.validation} />
                     </td>
                     <td>
-                      <span className={`chip ${stateChipClass(t.review)}`}>
-                        {t.review}
-                      </span>
+                      <StateChip state={t.review} />
                     </td>
                     <td>
-                      <span className={`chip ${stateChipClass(t.disposition)}`}>
-                        {t.disposition}
-                      </span>
+                      <StateChip state={t.disposition} />
                     </td>
                     <td>{fmtAgo(t.created_at)}</td>
                     <td>{t.acu_used ?? "unknown"}</td>
@@ -220,7 +242,7 @@ export default function App() {
           {reports.length === 0 ? (
             <div className="empty">No facts snapshots published yet.</div>
           ) : (
-            <table>
+            <table aria-label="report snapshots">
               <thead>
                 <tr>
                   <th>Snapshot</th>
@@ -258,6 +280,17 @@ export default function App() {
         <TaskDrawer task={selected} onClose={() => setSelected(null)} />
       )}
     </>
+  );
+}
+
+function StateChip({ state }: { state: string }) {
+  return (
+    <span className={`chip ${stateChipClass(state)}`}>
+      <span className="chip-dot" aria-hidden>
+        {stateIcon(state)}
+      </span>
+      {state}
+    </span>
   );
 }
 
@@ -299,7 +332,7 @@ function FilterBar({
     )
   ).sort();
   return (
-    <div style={{ padding: "8px 12px" }}>
+    <div className="filterbar">
       <label className="small">
         Filter by state:{" "}
         <select value={value} onChange={(e) => onChange(e.target.value)}>
@@ -311,6 +344,9 @@ function FilterBar({
           ))}
         </select>
       </label>
+      <span className="small hint">
+        rows are keyboard focusable — Enter/Space opens the drawer
+      </span>
     </div>
   );
 }

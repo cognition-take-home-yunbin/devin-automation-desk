@@ -1,6 +1,55 @@
 import { useEffect } from "react";
-import type { TaskDetail } from "../types";
-import { fmtTime, stateChipClass } from "../util";
+import type { Evidence, TaskDetail } from "../types";
+import { fmtTime, stateChipClass, stateIcon } from "../util";
+
+function Chip({ state }: { state: string }) {
+  return (
+    <span className={`chip ${stateChipClass(state)}`}>
+      <span className="chip-dot" aria-hidden>
+        {stateIcon(state)}
+      </span>
+      {state}
+    </span>
+  );
+}
+
+function Row({ k, children }: { k: string; children: React.ReactNode }) {
+  return (
+    <>
+      <dt>{k}</dt>
+      <dd>{children}</dd>
+    </>
+  );
+}
+
+/** Group evidence by provenance: the agent's own claims stay visibly
+ * separate from independently retrieved facts. */
+function groupEvidence(evidence: Evidence[]) {
+  const agent = evidence.filter((e) => e.verifier === "agent");
+  const independent = evidence.filter((e) => e.verifier === "github-verifier");
+  const manual = evidence.filter((e) => (e.verifier ?? "").startsWith("manual"));
+  const other = evidence.filter(
+    (e) =>
+      e.verifier !== "agent" &&
+      e.verifier !== "github-verifier" &&
+      !(e.verifier ?? "").startsWith("manual")
+  );
+  return { agent, independent, manual, other };
+}
+
+function EvidenceCard({ e }: { e: Evidence }) {
+  return (
+    <div className={`evidence-item kind-${e.kind}`}>
+      <span className="kind">
+        {e.kind}
+        {e.kind === "manual_verification" && " · NOT CI verified"}
+        {e.synthetic ? " · synthetic" : ""}
+      </span>
+      <div>{e.uri ? <a href={e.uri}>{e.title}</a> : e.title}</div>
+      {e.body != null && <pre>{JSON.stringify(e.body, null, 2)}</pre>}
+    </div>
+  );
+}
 
 /** Task detail drawer — the operator's evidence view for one repair. */
 export default function TaskDrawer({
@@ -21,6 +70,13 @@ export default function TaskDrawer({
       ? (task.issue_snapshot as { body?: string })
       : null;
 
+  const groups = groupEvidence(task.evidence);
+  // Session-reported questions: notes recorded while the session asked for
+  // input — shown prominently, separate from verified facts.
+  const questions = task.evidence.filter(
+    (e) => e.kind === "note" && e.title.toLowerCase().includes("input")
+  );
+
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
@@ -29,84 +85,76 @@ export default function TaskDrawer({
         role="dialog"
         aria-label={`Task ${task.id} detail`}
       >
-        <button className="close" onClick={onClose} aria-label="Close">
+        <button className="close" onClick={onClose} aria-label="Close (Esc)">
           ✕
         </button>
         <h2>
           #{task.issue_number} {task.issue_title}
           {task.synthetic && <span className="synthetic-tag">SYNTHETIC</span>}
         </h2>
+
         <dl>
-          <dt>Execution</dt>
-          <dd>
-            <span className={`chip ${stateChipClass(task.execution)}`}>
-              {task.execution}
-            </span>
-          </dd>
-          <dt>Validation</dt>
-          <dd>
-            <span className={`chip ${stateChipClass(task.validation)}`}>
-              {task.validation}
-            </span>
-          </dd>
-          <dt>Review</dt>
-          <dd>
-            <span className={`chip ${stateChipClass(task.review)}`}>
-              {task.review}
-            </span>
-          </dd>
-          <dt>Disposition</dt>
-          <dd>
-            <span className={`chip ${stateChipClass(task.disposition)}`}>
-              {task.disposition}
-            </span>
-          </dd>
-          <dt>Issue</dt>
-          <dd>
-            <a href={task.issue_url}>{task.issue_url}</a>
-          </dd>
-          <dt>PR</dt>
-          <dd>{task.pr_url ? <a href={task.pr_url}>{task.pr_url}</a> : "—"}</dd>
-          <dt>Session</dt>
-          <dd>
+          <Row k="Execution"><Chip state={task.execution} /></Row>
+          <Row k="Validation"><Chip state={task.validation} /></Row>
+          <Row k="Review"><Chip state={task.review} /></Row>
+          <Row k="Disposition"><Chip state={task.disposition} /></Row>
+          <Row k="Cleanup"><Chip state={task.cleanup_state} /></Row>
+        </dl>
+
+        <h3 className="small">Links</h3>
+        <dl>
+          <Row k="Issue"><a href={task.issue_url}>{task.issue_url}</a></Row>
+          <Row k="PR">
+            {task.pr_url ? <a href={task.pr_url}>{task.pr_url}</a> : "—"}
+          </Row>
+          <Row k="Session">
             {task.devin_session_url ? (
               <a href={task.devin_session_url}>{task.devin_session_url}</a>
             ) : (
               "—"
             )}
-          </dd>
-          <dt>Cleanup</dt>
-          <dd>
-            <span className={`chip ${stateChipClass(task.cleanup_state)}`}>
-              {task.cleanup_state}
-            </span>
-          </dd>
-          <dt>Slack</dt>
-          <dd>
+          </Row>
+          <Row k="Slack">
             {task.slack_link ? (
               <a href={task.slack_link}>{task.slack_link}</a>
             ) : (
               "—"
             )}
-          </dd>
-          <dt>Head SHA</dt>
-          <dd className="small">{task.head_sha ?? "—"}</dd>
-          <dt>Approved by</dt>
-          <dd>{task.approval_actor ?? "—"}</dd>
-          <dt>ACUs</dt>
-          <dd>
+          </Row>
+        </dl>
+
+        <h3 className="small">Revisions</h3>
+        <dl>
+          <Row k="Base SHA">
+            <code className="sha">{task.base_sha ?? "—"}</code>
+          </Row>
+          <Row k="Head SHA">
+            <code className="sha">{task.head_sha ?? "—"}</code>
+          </Row>
+          <Row k="Approved by">{task.approval_actor ?? "—"}</Row>
+          <Row k="ACUs">
             {task.acu_used ?? "unknown"} used
             {task.attempts[0]?.acu_limit
               ? ` / limit ${task.attempts[0].acu_limit}`
               : ""}
-          </dd>
-          {task.last_error && (
-            <>
-              <dt>Last error</dt>
-              <dd>{task.last_error}</dd>
-            </>
-          )}
+          </Row>
+          {task.last_error && <Row k="Last error">{task.last_error}</Row>}
         </dl>
+
+        {questions.length > 0 && (
+          <>
+            <h3 className="small">Questions for a human</h3>
+            {questions.map((q) => (
+              <div className="evidence-item question" key={q.id}>
+                <span className="kind">needs input</span>
+                <div>{q.title}</div>
+                {q.body != null && (
+                  <pre>{JSON.stringify(q.body, null, 2)}</pre>
+                )}
+              </div>
+            ))}
+          </>
+        )}
 
         {snapshot?.body && (
           <>
@@ -122,12 +170,26 @@ export default function TaskDrawer({
               <div className="evidence-item" key={a.id}>
                 <span className="kind">attempt {a.attempt_number}</span>
                 <div>
-                  {a.session_id ?? "(no session)"} — {a.raw_status ?? "…"}
+                  {a.session_url ? (
+                    <a href={a.session_url}>{a.session_id}</a>
+                  ) : (
+                    (a.session_id ?? "(no session)")
+                  )}{" "}
+                  — {a.raw_status ?? "…"}
+                  {a.raw_detail && a.raw_detail !== a.raw_status
+                    ? ` · ${a.raw_detail}`
+                    : ""}
                   {a.acu_used != null && ` · ${a.acu_used} ACU`}
                 </div>
                 <div className="small">
                   tag {a.correlation_tag} · started {fmtTime(a.started_at)}
                 </div>
+                {(a.prompt_hash || a.context_hash) && (
+                  <div className="small context-versions">
+                    context prompt:{a.prompt_hash?.slice(0, 10) ?? "—"} ctx:
+                    {a.context_hash?.slice(0, 10) ?? "—"}
+                  </div>
+                )}
               </div>
             ))}
           </>
@@ -136,20 +198,42 @@ export default function TaskDrawer({
         {task.evidence.length > 0 && (
           <>
             <h3 className="small">Evidence</h3>
-            {task.evidence.map((e) => (
-              <div className="evidence-item" key={e.id}>
-                <span className="kind">
-                  {e.kind}
-                  {e.synthetic ? " · synthetic" : ""}
-                </span>
-                <div>
-                  {e.uri ? <a href={e.uri}>{e.title}</a> : e.title}
-                </div>
-                {e.body != null && (
-                  <pre>{JSON.stringify(e.body, null, 2)}</pre>
-                )}
-              </div>
-            ))}
+            {groups.independent.length > 0 && (
+              <>
+                <h4 className="evidence-group">Independently verified</h4>
+                {groups.independent.map((e) => (
+                  <EvidenceCard e={e} key={e.id} />
+                ))}
+              </>
+            )}
+            {groups.manual.length > 0 && (
+              <>
+                <h4 className="evidence-group">
+                  Operator records (not CI verified)
+                </h4>
+                {groups.manual.map((e) => (
+                  <EvidenceCard e={e} key={e.id} />
+                ))}
+              </>
+            )}
+            {groups.agent.length > 0 && (
+              <>
+                <h4 className="evidence-group">
+                  Agent-reported (assertions, not facts)
+                </h4>
+                {groups.agent.map((e) => (
+                  <EvidenceCard e={e} key={e.id} />
+                ))}
+              </>
+            )}
+            {groups.other.length > 0 && (
+              <>
+                <h4 className="evidence-group">Other</h4>
+                {groups.other.map((e) => (
+                  <EvidenceCard e={e} key={e.id} />
+                ))}
+              </>
+            )}
           </>
         )}
 
