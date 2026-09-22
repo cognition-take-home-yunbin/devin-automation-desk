@@ -166,9 +166,11 @@ export default function App() {
           <FilterBar value={filter} onChange={setFilter} tasks={tasks} />
           {filtered.length === 0 ? (
             <div className="empty">
-              {overview?.mode === "simulation"
-                ? "No tasks yet — launch a scenario above to exercise the pipeline with synthetic data."
-                : "No approved issues discovered yet."}
+              {filter
+                ? `No tasks match “${filter}” right now.`
+                : overview?.mode === "simulation"
+                  ? "No tasks yet — launch a scenario above to exercise the pipeline with synthetic data."
+                  : "No approved issues discovered yet."}
             </div>
           ) : (
             <table aria-label="repair tasks">
@@ -331,6 +333,9 @@ function FilterBar({
       ])
     )
   ).sort();
+  // Keep the active selection visible even when no row currently matches —
+  // otherwise the select renders "all" while the dead filter still applies.
+  if (value && !states.includes(value)) states.push(value);
   return (
     <div className="filterbar">
       <label className="small">
@@ -339,7 +344,15 @@ function FilterBar({
           <option value="">all</option>
           {states.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {s === value && !tasks.some(
+                (t) =>
+                  t.execution === s ||
+                  t.validation === s ||
+                  t.review === s ||
+                  t.disposition === s
+              )
+                ? `${s} (no matches)`
+                : s}
             </option>
           ))}
         </select>

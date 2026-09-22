@@ -201,6 +201,18 @@ def cmd_verify_manual(args) -> int:
         )
         return 2
 
+    head_mismatch = (
+        task["head_sha"]
+        and task["head_sha"].lower() != args.head_sha.lower()
+    )
+    if head_mismatch:
+        print(
+            f"warning: --head-sha {args.head_sha[:12]} differs from the "
+            f"task's recorded head {task['head_sha'][:12]} — recording the "
+            "operator's SHA as a claim, review carefully",
+            file=sys.stderr,
+        )
+
     with db.transaction(conn):
         add_evidence(
             conn, task_id=task["id"], mode=settings.app_mode,
@@ -214,6 +226,8 @@ def cmd_verify_manual(args) -> int:
                 "command": args.command,
                 "results": args.results,
                 "evidence_uri": args.evidence,
+                "recorded_head_sha": task["head_sha"],
+                "head_matches_record": not head_mismatch,
                 "caveat": (
                     "operator-recorded verification; CI verification "
                     "was unavailable — this is not 'CI verified'"

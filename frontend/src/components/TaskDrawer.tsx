@@ -70,11 +70,15 @@ export default function TaskDrawer({
       ? (task.issue_snapshot as { body?: string })
       : null;
 
-  const groups = groupEvidence(task.evidence);
   // Session-reported questions: notes recorded while the session asked for
-  // input — shown prominently, separate from verified facts.
+  // input — shown prominently, separate from verified facts. Excluded from
+  // the provenance groups below so the question is rendered once.
   const questions = task.evidence.filter(
     (e) => e.kind === "note" && e.title.toLowerCase().includes("input")
+  );
+  const questionIds = new Set(questions.map((q) => q.id));
+  const groups = groupEvidence(
+    task.evidence.filter((e) => !questionIds.has(e.id))
   );
 
   return (
