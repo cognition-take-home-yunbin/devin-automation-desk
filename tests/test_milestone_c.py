@@ -292,7 +292,14 @@ def test_verify_manual_records_labeled_evidence(conn, worker, ctx):
     task = task_by_issue(conn, 103)
     assert task["validation"] == "checks_failed"
 
-    rc = cli.cmd_verify_manual(_manual_args(task["id"]))
+    # Through the real parser + dispatch — not just the handler.
+    rc = cli.main([
+        "verify-manual", str(task["id"]),
+        "--operator", "ops-lead", "--head-sha", "f" * 40,
+        "--command", "pytest tests/test_repair.py -q",
+        "--results", "12 passed",
+        "--evidence", "https://paste.example.invalid/run-42",
+    ])
     assert rc == 0
     task = _task(conn, task["id"])
     assert task["validation"] == "manually_verified"

@@ -419,7 +419,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m app.cli",
         description="Devin Repair Desk operator CLI (never starts a worker)",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # dest must not collide with verify-manual's own --command option.
+    sub = parser.add_subparsers(dest="action", required=True)
 
     sub.add_parser("doctor", help="read-only configuration/health check")
     sim = sub.add_parser("simulate", help="seed a simulation scenario")
@@ -486,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         "verify-manual": cmd_verify_manual,
         "slack-link": cmd_slack_link,
     }
-    return handlers[args.command](args)
+    return handlers[args.action](args)
 
 
 if __name__ == "__main__":
