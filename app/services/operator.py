@@ -125,7 +125,16 @@ def handle_stop_task(ctx: ServiceContext, job: sqlite3.Row) -> None:
 
     with db.transaction(conn):
         task = get_task(conn, task["id"])
-        budget.consume(conn, task["id"], None)
+        # Settle at observed spend — the last poll recorded the session's
+        # acu_used on the attempt row; absent any observation the full
+        # reservation stands as the conservative charge.
+        latest = conn.execute(
+            "SELECT acu_used FROM attempts WHERE task_id = ? "
+            "ORDER BY attempt_number DESC LIMIT 1",
+            (task["id"],),
+        ).fetchone()
+        observed = latest["acu_used"] if latest else None
+        budget.consume(conn, task["id"], observed)
         transition_task(
             conn, task, "execution", "stopped",
             action="session_terminated",
@@ -222,9 +231,12 @@ def handle_retry_task(ctx: ServiceContext, job: sqlite3.Row) -> None:
         )
         # The new attempt gets a fresh correlation tag and a fresh session —
         # the old session id must be detached or dispatch would reattach it.
+        # Cleanup state is per-session-lifecycle: the new session starts
+        # 'pending' again (its eventual 'kept'/'terminated' is recorded then).
         conn.execute(
             "UPDATE tasks SET devin_session_id = NULL, "
-            "devin_session_url = NULL, updated_at = ? WHERE id = ?",
+            "devin_session_url = NULL, cleanup_state = 'pending', "
+            "updated_at = ? WHERE id = ?",
             (db.now(), task["id"]),
         )
         add_evidence(
