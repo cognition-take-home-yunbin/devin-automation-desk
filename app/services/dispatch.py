@@ -18,10 +18,15 @@ import hashlib
 import sqlite3
 
 from .. import db
-from ..clients.base import AmbiguousCreation, DevinSessionSpec, RateLimited
+from ..clients.base import (
+    AmbiguousCreation,
+    DevinSessionSpec,
+    IssueNotFound,
+    RateLimited,
+)
 from ..transitions import add_evidence, audit, get_task, transition_task
 from .context import ServiceContext
-from . import jobs
+from . import budget, jobs, scanner
 
 
 def _next_attempt_number(conn: sqlite3.Connection, task_id: int) -> int:
@@ -35,6 +40,86 @@ def _next_attempt_number(conn: sqlite3.Connection, task_id: int) -> int:
 
 def _correlation_tag(mode: str, task_id: int, attempt: int) -> str:
     return f"repairdesk:{mode}:task-{task_id}:attempt-{attempt}"
+
+
+def _verify_approval_intact(
+    ctx: ServiceContext, task: sqlite3.Row
+) -> str | None:
+    """Re-verify intake facts before dispatch spends money.
+
+    Returns a human-readable stop reason, or None when the stored approval
+    still holds: the issue still resolves as open, its frozen snapshot is
+    unchanged, the approval label is still present, and the latest label
+    event for it remains an allowed approver's ``labeled`` (an ``unlabeled``
+    or a different actor means the approval was withdrawn or superseded).
+    """
+    s = ctx.settings
+    try:
+        issue = ctx.clients.github.get_issue(
+            task["repo"], task["issue_number"]
+        )
+    except IssueNotFound:
+        return "issue no longer resolves (closed or deleted)"
+    if issue.is_pull_request:
+        return "issue resolved as a pull-request object"
+    if issue.state != "open":
+        return f"issue state is {issue.state!r}, not open"
+    # Approval withdrawal is checked before content drift: the snapshot hash
+    # includes labels, so a removed label would otherwise misreport as a
+    # content change instead of a withdrawn approval.
+    labels = ctx.clients.github.get_issue_labels(
+        task["repo"], task["issue_number"]
+    )
+    if s.approval_issue_label not in labels:
+        return f"approval label {s.approval_issue_label} was removed"
+    events = [
+        e
+        for e in ctx.clients.github.list_label_events(
+            task["repo"], task["issue_number"]
+        )
+        if e.label == s.approval_issue_label
+    ]
+    latest = events[-1] if events else None
+    if latest is None or latest.event != "labeled":
+        return "latest approval-label event is an unlabeling"
+    if latest.actor not in s.github_allowed_approvers:
+        return (
+            f"latest approval actor {latest.actor!r} not in "
+            "GITHUB_ALLOWED_APPROVERS"
+        )
+    current_hash = scanner.issue_snapshot_hash(issue)
+    stored_hash = task["issue_snapshot_hash"] or ""
+    if current_hash != stored_hash:
+        return (
+            f"accepted snapshot changed "
+            f"({stored_hash[:12]} -> {current_hash[:12]})"
+        )
+    return None
+
+
+def _stop_for_review(
+    ctx: ServiceContext, task: sqlite3.Row, reason: str
+) -> None:
+    """'Stop for review' — the accepted facts changed before dispatch."""
+    with db.transaction(ctx.conn):
+        ctx.conn.execute(
+            "UPDATE approval_receipts SET processing_state = 'rejected' "
+            "WHERE task_id = ? AND processing_state = 'accepted'",
+            (task["id"],),
+        )
+        audit(
+            ctx.conn, action="dispatch_review_blocked", mode=ctx.mode,
+            task_id=task["id"], detail=reason,
+        )
+        transition_task(
+            ctx.conn, task, "disposition", "blocked",
+            detail=f"stopped for review: {reason}",
+        )
+        add_evidence(
+            ctx.conn, task_id=task["id"], mode=ctx.mode, kind="note",
+            title=f"Dispatch stopped for review: {reason}",
+            synthetic=task["synthetic"] == 1,
+        )
 
 
 def _active_session_count(conn: sqlite3.Connection, mode: str) -> int:
@@ -94,11 +179,23 @@ def handle_dispatch(ctx: ServiceContext, job: sqlite3.Row) -> None:
         )
         return
 
+    # Re-verify before spending: the frozen snapshot and the approval must
+    # still hold, otherwise the task stops for review instead of dispatching.
+    if task["execution"] == "queued":
+        stop_reason = _verify_approval_intact(ctx, task)
+        if stop_reason:
+            _stop_for_review(ctx, task, stop_reason)
+            return
+
     if _active_session_count(conn, ctx.mode) >= s.max_active_sessions:
         raise jobs.RetryLater(
             s.poll_interval_seconds,
             "MAX_ACTIVE_SESSIONS reached; serial dispatch",
         )
+
+    # Reservation-based admission: hold REPAIR_ACU_LIMIT before creating.
+    if task["execution"] == "queued":
+        budget.check_admission(ctx, task["id"], float(s.repair_acu_limit))
 
     # Persist the creation intent BEFORE calling Devin.
     attempt_number = _next_attempt_number(conn, task["id"])
@@ -129,6 +226,10 @@ def handle_dispatch(ctx: ServiceContext, job: sqlite3.Row) -> None:
             ),
         )
         attempt_id = int(cur.lastrowid)
+        budget.reserve(
+            conn, task["id"], ctx.mode, float(s.repair_acu_limit),
+            scope="session", note=f"attempt {attempt_number}",
+        )
         transition_task(conn, task, "execution", "dispatching",
                         detail=f"attempt {attempt_number}, tag {tag}")
 
@@ -177,6 +278,11 @@ def handle_dispatch(ctx: ServiceContext, job: sqlite3.Row) -> None:
             "UPDATE attempts SET raw_status = 'throttled', finished_at = ? "
             "WHERE id = ?",
             (db.now(), attempt_id),
+        )
+        budget.release(conn, task["id"])
+        transition_task(
+            conn, get_task(conn, task["id"]), "execution", "queued",
+            detail="create_session throttled; released reservation",
         )
         raise
 
