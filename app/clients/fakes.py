@@ -21,6 +21,7 @@ from .base import (
     DevinSessionSpec,
     ExternalWriteDisabled,
     Issue,
+    IssueNotFound,
     LabelEvent,
     PullRequest,
     RateLimited,
@@ -78,6 +79,16 @@ class FakeGitHubClient:
             if label in db.loads(r["labels_json"], [])
         ]
 
+    def get_issue(self, repo: str, number: int) -> Issue:
+        _raise_if_scripted(self.conn, "github.get_issue")
+        r = self.conn.execute(
+            "SELECT * FROM sim_issues WHERE repo = ? AND number = ?",
+            (repo, number),
+        ).fetchone()
+        if r is None or r["state"] != "open":
+            raise IssueNotFound(f"simulated issue {repo}#{number} gone")
+        return self._to_issue(r)
+
     def _to_issue(self, r: sqlite3.Row) -> Issue:
         return Issue(
             repo=r["repo"],
@@ -87,7 +98,7 @@ class FakeGitHubClient:
             labels=db.loads(r["labels_json"], []),
             url=f"https://github.example.invalid/{r['repo']}/issues/{r['number']}",
             body=r["body"] or "",
-            is_pull_request=False,
+            is_pull_request=bool(r["is_pull_request"]) if "is_pull_request" in r.keys() else False,
         )
 
     def get_issue_labels(self, repo: str, number: int) -> list[str]:
@@ -248,8 +259,8 @@ class FakeDevinClient:
         script = db.loads(r["script_json"], {})
         seq = script.get("sequence", ["finished"])
         idx = r["cursor"]
-        status = seq[min(idx, len(seq) - 1)]
-        if not peek and idx < len(seq) - 1:
+        status = "stopped" if script.get("stopped") else seq[min(idx, len(seq) - 1)]
+        if not peek and not script.get("stopped") and idx < len(seq) - 1:
             self.conn.execute(
                 "UPDATE sim_sessions SET cursor = cursor + 1, "
                 "acu_used = acu_used + 1.25 WHERE id = ?",
@@ -268,6 +279,54 @@ class FakeDevinClient:
             session.pr_url = script.get("pr_url")
             session.pr_head_sha = script.get("pr_head_sha")
         return session
+
+    def message_session(self, session_id: str, text: str) -> None:
+        _raise_if_scripted(self.conn, "devin.message_session")
+        r = self.conn.execute(
+            "SELECT * FROM sim_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if r is None:
+            raise KeyError(f"unknown simulated session {session_id}")
+        script = db.loads(r["script_json"], {})
+        if script.get("stopped"):
+            raise RuntimeError(
+                f"simulated session {session_id} is stopped — cannot message"
+            )
+        script.setdefault("messages", []).append(
+            {"text": text, "sent_at": db.now()}
+        )
+        self.conn.execute(
+            "UPDATE sim_sessions SET script_json = ? WHERE id = ?",
+            (db.dumps(script), r["id"]),
+        )
+
+    def stop_session(self, session_id: str, archive: bool = True) -> DevinSession:
+        _raise_if_scripted(self.conn, "devin.stop_session")
+        r = self.conn.execute(
+            "SELECT * FROM sim_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if r is None:
+            raise KeyError(f"unknown simulated session {session_id}")
+        script = db.loads(r["script_json"], {})
+        script["stopped"] = True
+        script["archived"] = bool(archive)
+        self.conn.execute(
+            "UPDATE sim_sessions SET script_json = ? WHERE id = ?",
+            (db.dumps(script), r["id"]),
+        )
+        return DevinSession(
+            session_id=session_id,
+            status="stopped",
+            status_detail="terminated" if archive else "stopped",
+            url=f"https://app.devin.example.invalid/sessions/{session_id}",
+        )
+
+    def daily_acu_usage(
+        self, time_after: float, time_before: float
+    ) -> float | None:
+        # Simulation has no remote consumption API — callers exercise the
+        # local-reservation accounting path instead.
+        return None
 
 
 class FakeReportSink:

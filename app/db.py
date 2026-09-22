@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     base_sha TEXT,
     head_sha TEXT,
     last_error TEXT,
+    cleanup_state TEXT NOT NULL DEFAULT 'pending',
     synthetic INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
@@ -198,6 +199,7 @@ CREATE TABLE IF NOT EXISTS sim_issues (
     state TEXT NOT NULL DEFAULT 'open',
     labels_json TEXT NOT NULL DEFAULT '[]',
     body TEXT,
+    is_pull_request INTEGER NOT NULL DEFAULT 0,
     session_script_json TEXT,
     UNIQUE (repo, number)
 );
@@ -253,6 +255,33 @@ CREATE TABLE IF NOT EXISTS sim_report_issue (
     body TEXT NOT NULL DEFAULT '',
     updated_at REAL
 );
+
+-- ---------------------------------------------------------------------------
+-- Milestone B: reservation-based managed spending + operator cleanup ledger.
+CREATE TABLE IF NOT EXISTS budget_reservations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    mode TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK (scope IN ('session', 'followup')),
+    amount REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'held'
+        CHECK (status IN ('held', 'consumed', 'released')),
+    session_id TEXT,
+    note TEXT,
+    created_at REAL NOT NULL,
+    resolved_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS cleanup_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    mode TEXT NOT NULL,
+    action TEXT NOT NULL,       -- kept | terminated
+    actor TEXT NOT NULL DEFAULT 'system',
+    session_id TEXT,
+    detail TEXT,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -279,6 +308,7 @@ def connect(sqlite_path: str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.execute(
         "INSERT OR IGNORE INTO control (id, paused, updated_at) VALUES (1, 0, ?)",
         (time.time(),),
@@ -288,6 +318,21 @@ def init_db(conn: sqlite3.Connection) -> None:
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Guarded ALTERs so a v1 database picks up v2 columns on first boot."""
+    for table, column, ddl in (
+        ("tasks", "cleanup_state",
+         "ALTER TABLE tasks ADD COLUMN cleanup_state "
+         "TEXT NOT NULL DEFAULT 'pending'"),
+        ("sim_issues", "is_pull_request",
+         "ALTER TABLE sim_issues ADD COLUMN is_pull_request "
+         "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(ddl)
 
 
 _savepoint_counter = 0

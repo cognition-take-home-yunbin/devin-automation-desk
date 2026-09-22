@@ -14,6 +14,8 @@ export interface TaskSummary {
   approval_actor: string | null;
   pr_url: string | null;
   devin_session_url: string | null;
+  slack_link: string | null;
+  cleanup_state: string;
   head_sha: string | null;
   base_sha: string | null;
   acu_used: number | null;
@@ -72,6 +74,8 @@ export interface Overview {
   repo: string;
   last_scan_at: number | null;
   last_publish_at: number | null;
+  scan_age_seconds: number | null;
+  scan_fresh: boolean;
   metrics: Record<string, number | string>;
   limits: Record<string, number>;
   generated_at: number;

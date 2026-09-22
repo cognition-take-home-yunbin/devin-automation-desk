@@ -75,6 +75,20 @@ export default function TaskDrawer({
               "—"
             )}
           </dd>
+          <dt>Cleanup</dt>
+          <dd>
+            <span className={`chip ${stateChipClass(task.cleanup_state)}`}>
+              {task.cleanup_state}
+            </span>
+          </dd>
+          <dt>Slack</dt>
+          <dd>
+            {task.slack_link ? (
+              <a href={task.slack_link}>{task.slack_link}</a>
+            ) : (
+              "—"
+            )}
+          </dd>
           <dt>Head SHA</dt>
           <dd className="small">{task.head_sha ?? "—"}</dd>
           <dt>Approved by</dt>

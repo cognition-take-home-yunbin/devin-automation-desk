@@ -15,8 +15,8 @@ from pathlib import Path
 
 from . import db
 from .config import ConfigError, Settings, doctor_report, load_settings
-from .services import simulator
-from .transitions import is_paused, set_paused
+from .services import jobs, simulator
+from .transitions import audit, is_paused, set_paused
 
 
 def _ts(ts: float | None) -> str:
@@ -67,6 +67,117 @@ def cmd_simulate(args) -> int:
     print(json.dumps(result, indent=2))
     print("Seeded synthetic fixtures and queued a scan job — the running "
           "app's worker will pick it up. Existing state was preserved.")
+    return 0
+
+
+def cmd_scan(args) -> int:
+    """`scan now` — enqueue a scan job ahead of the schedule."""
+    settings = _settings()
+    conn = _connect(settings)
+    with db.transaction(conn):
+        job_id = jobs.enqueue(
+            conn, "scan_issues", {"scheduled": False},
+            mode=settings.app_mode,
+        )
+        audit(conn, action="scan_requested", mode=settings.app_mode,
+              source="operator", detail="manual scan now")
+    print(f"queued scan_issues job #{job_id} "
+          "(the running worker will pick it up)")
+    return 0
+
+
+def _find_task(conn, settings: Settings, task_id: int):
+    row = conn.execute(
+        "SELECT * FROM tasks WHERE id = ? AND mode = ?",
+        (task_id, settings.app_mode),
+    ).fetchone()
+    if row is None:
+        print(f"task {task_id} not found (mode={settings.app_mode})",
+              file=sys.stderr)
+        raise SystemExit(2)
+    return row
+
+
+def cmd_message(args) -> int:
+    """`message TASK_ID TEXT` — send an operator message to the session."""
+    settings = _settings()
+    conn = _connect(settings)
+    task = _find_task(conn, settings, args.task_id)
+    if not task["devin_session_id"]:
+        print(f"task {task['id']} has no Devin session yet", file=sys.stderr)
+        return 2
+    with db.transaction(conn):
+        job_id = jobs.enqueue(
+            conn, "send_message",
+            {"task_id": task["id"], "text": args.text, "actor": "operator"},
+            mode=settings.app_mode,
+        )
+    print(f"queued send_message job #{job_id} for task {task['id']} "
+          f"(session {task['devin_session_id']})")
+    return 0
+
+
+def cmd_stop(args) -> int:
+    """`stop TASK_ID` — permanently terminate the session (archive=true)."""
+    settings = _settings()
+    conn = _connect(settings)
+    task = _find_task(conn, settings, args.task_id)
+    with db.transaction(conn):
+        job_id = jobs.enqueue(
+            conn, "stop_task",
+            {"task_id": task["id"], "reason": args.reason or "operator stop",
+             "actor": "operator"},
+            mode=settings.app_mode,
+        )
+    print(f"queued stop_task job #{job_id} for task {task['id']} — "
+          "permanent, preserves task outcome")
+    return 0
+
+
+def cmd_retry(args) -> int:
+    """`retry TASK_ID --reason TEXT` — intentional re-dispatch."""
+    settings = _settings()
+    conn = _connect(settings)
+    task = _find_task(conn, settings, args.task_id)
+    with db.transaction(conn):
+        job_id = jobs.enqueue(
+            conn, "retry_task",
+            {"task_id": task["id"], "reason": args.reason,
+             "actor": "operator"},
+            mode=settings.app_mode,
+        )
+    print(f"queued retry_task job #{job_id} for task {task['id']} "
+          f"(reason: {args.reason})")
+    return 0
+
+
+def cmd_reconcile(args) -> int:
+    """`reconcile TASK_ID` — locate a session by correlation tag."""
+    settings = _settings()
+    conn = _connect(settings)
+    task = _find_task(conn, settings, args.task_id)
+    with db.transaction(conn):
+        job_id = jobs.enqueue(
+            conn, "reconcile_task", {"task_id": task["id"]},
+            mode=settings.app_mode,
+        )
+    print(f"queued reconcile_task job #{job_id} for task {task['id']}")
+    return 0
+
+
+def cmd_slack_link(args) -> int:
+    """Record the native Slack thread link on a task (manual bookkeeping)."""
+    settings = _settings()
+    conn = _connect(settings)
+    task = _find_task(conn, settings, args.task_id)
+    with db.transaction(conn):
+        conn.execute(
+            "UPDATE tasks SET slack_link = ?, updated_at = ? WHERE id = ?",
+            (args.url, db.now(), task["id"]),
+        )
+        audit(conn, action="slack_link_recorded", mode=settings.app_mode,
+              task_id=task["id"], source="operator", detail=args.url)
+    print(f"task {task['id']}: slack_link -> {args.url}")
     return 0
 
 
@@ -223,6 +334,27 @@ def main(argv: list[str] | None = None) -> int:
     exp.add_argument("--output", "-o", default=None,
                      help="directory for the evidence bundle")
 
+    scan = sub.add_parser("scan", help="enqueue a scan ahead of the schedule")
+    scan.add_argument("when", nargs="?", default="now", choices=["now"])
+    msg = sub.add_parser("message", help="message TASK_ID TEXT to the session")
+    msg.add_argument("task_id", type=int)
+    msg.add_argument("text")
+    stop = sub.add_parser(
+        "stop", help="terminate the task's session (archive=true)")
+    stop.add_argument("task_id", type=int)
+    stop.add_argument("--reason", default="")
+    retry = sub.add_parser(
+        "retry", help="intentional retry — requires --reason")
+    retry.add_argument("task_id", type=int)
+    retry.add_argument("--reason", required=True)
+    rec = sub.add_parser(
+        "reconcile", help="find the task's session by correlation tag")
+    rec.add_argument("task_id", type=int)
+    slack = sub.add_parser(
+        "slack-link", help="record the native Slack thread URL on a task")
+    slack.add_argument("task_id", type=int)
+    slack.add_argument("url")
+
     args = parser.parse_args(argv)
     handlers = {
         "doctor": cmd_doctor,
@@ -232,6 +364,12 @@ def main(argv: list[str] | None = None) -> int:
         "pause": cmd_pause,
         "unpause": cmd_unpause,
         "export-evidence": cmd_export_evidence,
+        "scan": cmd_scan,
+        "message": cmd_message,
+        "stop": cmd_stop,
+        "retry": cmd_retry,
+        "reconcile": cmd_reconcile,
+        "slack-link": cmd_slack_link,
     }
     return handlers[args.command](args)
 

@@ -20,6 +20,8 @@ class TaskSummary(BaseModel):
     approval_actor: str | None
     pr_url: str | None
     devin_session_url: str | None
+    slack_link: str | None
+    cleanup_state: str
     head_sha: str | None
     base_sha: str | None
     acu_used: float | None
@@ -98,6 +100,8 @@ class OverviewOut(BaseModel):
     repo: str
     last_scan_at: float | None
     last_publish_at: float | None
+    scan_age_seconds: float | None
+    scan_fresh: bool
     metrics: dict
     limits: dict
     generated_at: float

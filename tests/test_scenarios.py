@@ -22,6 +22,11 @@ def test_happy_path_end_to_end(conn, worker, ctx):
     assert task["synthetic"] == 1
     pubs = conn.execute("SELECT * FROM publication_records").fetchall()
     assert pubs and pubs[-1]["status"] == "confirmed"
+    # regression: the verify job must not race the pr_found->checks_pending
+    # transition — no InvalidTransition retries in the audit trail
+    bad = [a for a in audits(conn)
+           if a["action"] == "job_retry" and "InvalidTransition" in (a["detail"] or "")]
+    assert bad == []
 
 
 def test_repeated_discovery_dedupes(conn, worker, ctx):

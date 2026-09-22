@@ -26,7 +26,7 @@ def handle_verify(ctx: ServiceContext, job: sqlite3.Row) -> None:
     pr_number = payload["pr_number"]
     recorded_head = payload.get("head_sha") or task["head_sha"]
 
-    transition_task(conn, task, "validation", "checks_pending")
+    task = transition_task(conn, task, "validation", "checks_pending")
 
     # Repository and base-branch provenance.
     pr = ctx.clients.github.get_pull_request(task["repo"], pr_number)
