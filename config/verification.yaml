@@ -1,0 +1,19 @@
+# Verification policy (version 1) — what "independently verified" means.
+#
+# The verifier requires every named check to have concluded "success" on the
+# PR's current head SHA, produced by a trusted workflow. Missing, pending,
+# skipped, neutral, cancelled, untrusted-provenance, or stale (wrong-SHA)
+# checks never yield "verified". An empty required_checks list is rejected
+# at load time — no checks is not success.
+version: 1
+name: repair-desk-verification
+required_checks:
+  - name: regression-test
+    workflow: pilot-validation
+  - name: lint
+    workflow: pilot-validation
+trusted_workflows:
+  - pilot-validation
+require_head_sha_match: true
+stale_after_seconds: 900
+max_reverify_attempts: 5
