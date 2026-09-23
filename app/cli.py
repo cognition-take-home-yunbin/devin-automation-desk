@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db
+from .clients.factory import build_clients
 from .config import ConfigError, Settings, doctor_report, load_settings
-from .services import jobs, simulator
+from .services import jobs, native, simulator
+from .services.context import ServiceContext
 from .transitions import audit, is_paused, set_paused
 
 
@@ -321,17 +323,66 @@ def cmd_tasks(_args) -> int:
     return 0
 
 
+def cmd_publish_report_source(_args) -> int:
+    """Queue a report-source publish ahead of the interval — the worker
+    still enforces destination validation and the material-change gate."""
+    settings = _settings()
+    conn = _connect(settings)
+    with db.transaction(conn):
+        job_id = jobs.enqueue(
+            conn, "publish_report",
+            {"task_id": None, "source": "operator"},
+            mode=settings.app_mode,
+            dedup_key=f"report:operator:{db.now()}",
+        )
+        audit(conn, action="report_source_requested",
+              mode=settings.app_mode, source="operator",
+              detail="manual publish-report-source")
+    print(f"queued publish_report job #{job_id} — updates the fixed "
+          "report-source issue only (never a new issue/comment)")
+    return 0
+
+
+def cmd_native_link(args) -> int:
+    """Record an operator-verified Slack/session link on a native report
+    session. This is the only delivery evidence the desk accepts — a
+    session's status never implies Slack delivery."""
+    settings = _settings()
+    conn = _connect(settings)
+    ctx = ServiceContext(
+        conn=conn, settings=settings,
+        clients=build_clients(settings, conn),
+    )
+    row_id = native.record_link(
+        ctx, session_id=args.session_id, slack_link=args.url,
+        session_url=args.session_url, operator=args.operator,
+    )
+    print(f"native_sessions #{row_id}: slack_link -> {args.url} "
+          f"(manual, recorded by {args.operator})")
+    return 0
+
+
 def cmd_reports(_args) -> int:
     settings = _settings()
     conn = _connect(settings)
+    control = conn.execute(
+        "SELECT last_publish_at, last_native_observe_at, "
+        "native_observe_error FROM control WHERE id = 1"
+    ).fetchone()
     rows = conn.execute(
         "SELECT * FROM report_snapshots WHERE mode = ? ORDER BY id DESC",
         (settings.app_mode,),
     ).fetchall()
+    print(
+        f"reports (mode={settings.app_mode}, "
+        f"last_publish={_ts(control['last_publish_at'])}, "
+        f"last_native_observe={_ts(control['last_native_observe_at'])}"
+        + (f", observe_error={control['native_observe_error']}"
+           if control["native_observe_error"] else "")
+        + ")"
+    )
     if not rows:
-        print(f"no report snapshots (mode={settings.app_mode})")
-        return 0
-    print(f"report snapshots (mode={settings.app_mode})")
+        print("  no report snapshots")
     for r in rows:
         pubs = conn.execute(
             "SELECT status, destination_repo, destination_issue_number, "
@@ -347,6 +398,23 @@ def cmd_reports(_args) -> int:
             print(
                 f"       {p['status']} -> {p['destination_repo']}#"
                 f"{p['destination_issue_number']} ({p['external_ref'] or '-'})"
+            )
+    native_rows = conn.execute(
+        "SELECT session_id, url, status, status_detail, acu_used, "
+        "slack_link, last_seen_at FROM native_sessions "
+        "WHERE mode = ? ORDER BY last_seen_at DESC",
+        (settings.app_mode,),
+    ).fetchall()
+    if native_rows:
+        print("  native report sessions (read-only observations; a "
+              "session's status does not imply Slack delivery):")
+        for n in native_rows:
+            acu = "unknown" if n["acu_used"] is None else n["acu_used"]
+            print(
+                f"    {n['session_id']}  status={n['status']} "
+                f"({n['status_detail']})  acu={acu}  "
+                f"slack={n['slack_link'] or '-'}  "
+                f"seen={_ts(n['last_seen_at'])}"
             )
     return 0
 
@@ -420,6 +488,21 @@ def cmd_export_evidence(args) -> int:
     bundle["publication_records"] = [
         dict(r) for r in conn.execute("SELECT * FROM publication_records")
     ]
+    bundle["native_sessions"] = [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM native_sessions WHERE mode = ?",
+            (settings.app_mode,),
+        )
+    ]
+    bundle["budget_reservations"] = [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM budget_reservations WHERE mode = ?",
+            (settings.app_mode,),
+        )
+    ]
+    bundle["control"] = dict(
+        conn.execute("SELECT * FROM control WHERE id = 1").fetchone()
+    )
     bundle["jobs"] = [dict(r) for r in conn.execute("SELECT * FROM jobs")]
 
     path = out_dir / f"evidence-{settings.app_mode}-{int(db.now())}.json"
@@ -440,7 +523,23 @@ def main(argv: list[str] | None = None) -> int:
     sim = sub.add_parser("simulate", help="seed a simulation scenario")
     sim.add_argument("scenario", choices=simulator.SCENARIOS)
     sub.add_parser("tasks", help="list tasks")
-    sub.add_parser("reports", help="list report snapshots/publications")
+    sub.add_parser("reports", help="list report snapshots/publications"
+                   " and native sessions")
+    sub.add_parser(
+        "publish-report-source",
+        help="queue a publish to the fixed report-source issue now",
+    )
+    nl = sub.add_parser(
+        "native-link",
+        help="record an operator-verified slack link on a native "
+             "report session",
+    )
+    nl.add_argument("session_id", help="native session id")
+    nl.add_argument("url", help="slack permalink")
+    nl.add_argument("--session-url", dest="session_url", default=None,
+                    help="native session URL (if not yet observed)")
+    nl.add_argument("--operator", default="operator",
+                    help="who recorded the link")
     sub.add_parser("pause", help="pause new dispatch (polling continues)")
     sub.add_parser("unpause", help="resume dispatch")
     exp = sub.add_parser("export-evidence", help="export an evidence bundle")
@@ -490,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
         "simulate": cmd_simulate,
         "tasks": cmd_tasks,
         "reports": cmd_reports,
+        "publish-report-source": cmd_publish_report_source,
+        "native-link": cmd_native_link,
         "pause": cmd_pause,
         "unpause": cmd_unpause,
         "export-evidence": cmd_export_evidence,

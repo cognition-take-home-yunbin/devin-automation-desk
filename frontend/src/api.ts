@@ -1,4 +1,10 @@
-import type { Overview, Report, TaskDetail, TaskSummary } from "./types";
+import type {
+  NativeSession,
+  Overview,
+  Report,
+  TaskDetail,
+  TaskSummary,
+} from "./types";
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(path);
@@ -11,6 +17,7 @@ export const api = {
   tasks: () => get<TaskSummary[]>("/api/tasks"),
   task: (id: number) => get<TaskDetail>(`/api/tasks/${id}`),
   reports: () => get<Report[]>("/api/reports"),
+  nativeSessions: () => get<NativeSession[]>("/api/native-sessions"),
   startScenario: (scenario: string) =>
     fetch("/api/simulation/scenarios", {
       method: "POST",

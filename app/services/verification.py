@@ -236,3 +236,18 @@ def handle_verify(ctx: ServiceContext, job: sqlite3.Row) -> None:
             dedup_key=f"report:{ctx.mode}:{task['id']}:{task['pr_number']}",
             max_attempts=s.job_max_attempts,
         )
+        # One budgeted factual update to the repair session asking it to
+        # summarize the evidence in its connected native conversation.
+        jobs.enqueue(
+            conn, "verification_update",
+            {
+                "task_id": task["id"],
+                "head_sha": head_sha,
+                "pr_url": task["pr_url"],
+                "checks": {c.name: by_name[c.name].conclusion
+                           for c in policy.required_checks},
+            },
+            mode=ctx.mode,
+            dedup_key=f"vu:{ctx.mode}:{task['id']}:{head_sha or task['id']}",
+            max_attempts=s.job_max_attempts,
+        )

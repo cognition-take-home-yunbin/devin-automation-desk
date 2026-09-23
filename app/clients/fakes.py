@@ -259,6 +259,25 @@ class FakeDevinClient:
             return None
         return self._advance(r, peek=True)
 
+    def list_sessions_by_tag(self, tag: str) -> list[DevinSession]:
+        """Native-report observation — reads ``sim_native_sessions``, never
+        the managed repair fixtures."""
+        _raise_if_scripted(self.conn, "devin.list_sessions_by_tag")
+        rows = self.conn.execute(
+            "SELECT * FROM sim_native_sessions WHERE tag = ? "
+            "ORDER BY created_at", (tag,),
+        ).fetchall()
+        return [
+            DevinSession(
+                session_id=r["session_id"],
+                status=r["status"] or "unknown",
+                status_detail=r["status_detail"] or "",
+                url=r["url"],
+                acu_used=r["acu_used"],
+            )
+            for r in rows
+        ]
+
     def get_session(self, session_id: str) -> DevinSession:
         _raise_if_scripted(self.conn, "devin.get_session")
         r = self.conn.execute(
@@ -351,25 +370,53 @@ class FakeReportSink:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
+    def get_issue(self, repo: str, issue_number: int) -> Issue:
+        _raise_if_scripted(self.conn, "report.get_issue")
+        row = self.conn.execute(
+            "SELECT repo, issue_number, body FROM sim_report_issue "
+            "WHERE repo = ? AND issue_number = ?",
+            (repo, issue_number),
+        ).fetchone()
+        if row is None:
+            raise IssueNotFound(
+                f"no simulated report-source issue {repo}#{issue_number}"
+            )
+        return Issue(
+            repo=repo,
+            number=issue_number,
+            title="simulated report-source issue",
+            state="open",
+            labels=[],
+            url=f"https://github.example.invalid/{repo}/issues/{issue_number}",
+            body=row["body"],
+        )
+
     def publish_snapshot(self, repo: str, issue_number: int, body: str) -> str:
-        _raise_if_scripted(self.conn, "report.publish_snapshot")
+        # An "ambiguous_creation" script means the write may have landed
+        # even though the caller never saw the result — apply it, then raise
+        # so the read-back reconcile path gets exercised honestly.
+        err = _scripted_error(self.conn, "report.publish_snapshot")
+        if err is not None and err != "ambiguous_creation":
+            if err == "rate_limited":
+                raise RateLimited(retry_after=0.05)
+            raise RuntimeError(f"simulated {err} on report.publish_snapshot")
         row = self.conn.execute(
             "SELECT id, revision FROM sim_report_issue WHERE repo = ? AND issue_number = ?",
             (repo, issue_number),
         ).fetchone()
         if row is None:
-            self.conn.execute(
-                """INSERT INTO sim_report_issue
-                   (repo, issue_number, revision, body, updated_at)
-                   VALUES (?, ?, 1, ?, ?)""",
-                (repo, issue_number, body, db.now()),
+            raise IssueNotFound(
+                f"no simulated report-source issue {repo}#{issue_number} "
+                "— publish refused"
             )
-            revision = 1
-        else:
-            revision = row["revision"] + 1
-            self.conn.execute(
-                "UPDATE sim_report_issue SET revision = ?, body = ?, "
-                "updated_at = ? WHERE id = ?",
-                (revision, body, db.now(), row["id"]),
+        revision = row["revision"] + 1
+        self.conn.execute(
+            "UPDATE sim_report_issue SET revision = ?, body = ?, "
+            "updated_at = ? WHERE id = ?",
+            (revision, body, db.now(), row["id"]),
+        )
+        if err == "ambiguous_creation":
+            raise AmbiguousCreation(
+                "simulated ambiguous report publish (write landed)"
             )
         return f"{sha_of(body)[:16]}@r{revision}"

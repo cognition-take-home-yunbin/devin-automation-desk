@@ -8,6 +8,8 @@ services:
     environment:
       DATABASE_PATH: /data/repairdesk.sqlite
       VERIFICATION_POLICY_PATH: /app/config/verification.yaml
+      # Evidence bundles land on the durable volume (/data is repairdesk-owned)
+      EVIDENCE_EXPORT_DIR: /data/evidence
       STATIC_DIR: /app/frontend/dist
     ports:
       - "127.0.0.1:8000:8000"

@@ -173,6 +173,18 @@ class LiveDevinClient:
             return None
         return self._to_session(items[0])
 
+    def list_sessions_by_tag(self, tag: str) -> list[DevinSession]:
+        """Read-only listing for native-report observation. Bounded to one
+        page — the tag is only ever applied by the reporting automation, so
+        cardinality stays small by construction."""
+        resp = self._request(
+            "GET",
+            f"/organizations/{self.org_id}/sessions",
+            params={"tags": tag, "first": 100},
+        )
+        items = resp.json().get("items") or []
+        return [self._to_session(i) for i in items]
+
     def get_session(self, session_id: str) -> DevinSession:
         resp = self._request(
             "GET", f"/organizations/{self.org_id}/sessions/{session_id}"

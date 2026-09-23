@@ -218,6 +218,34 @@ class LiveReportSink:
             },
         )
 
+    def get_issue(self, repo: str, issue_number: int) -> Issue:
+        """Read-back for destination validation and ambiguous-write
+        reconcile. A PR object is never a valid report destination."""
+        try:
+            resp = self._client.get(
+                f"/repos/{repo}/issues/{issue_number}"
+            )
+        except httpx.TimeoutException as exc:
+            raise RateLimited(retry_after=5.0) from exc
+        if resp.status_code in (403, 429) and (
+            _parse_retry_after(resp) is not None or _is_rate_limited(resp)
+        ):
+            raise RateLimited(retry_after=_parse_retry_after(resp) or 60.0)
+        if resp.status_code == 404:
+            raise IssueNotFound(f"{repo}#{issue_number}")
+        resp.raise_for_status()
+        it = resp.json()
+        return Issue(
+            repo=repo,
+            number=int(it["number"]),
+            title=it.get("title") or "",
+            state=it.get("state") or "",
+            labels=[lbl["name"] for lbl in it.get("labels", [])],
+            url=it.get("html_url") or "",
+            body=it.get("body") or "",
+            is_pull_request="pull_request" in it,
+        )
+
     def publish_snapshot(self, repo: str, issue_number: int, body: str) -> str:
         try:
             resp = self._client.patch(

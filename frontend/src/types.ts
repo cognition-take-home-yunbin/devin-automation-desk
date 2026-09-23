@@ -78,6 +78,9 @@ export interface Overview {
   last_publish_at: number | null;
   scan_age_seconds: number | null;
   scan_fresh: boolean;
+  publish_fresh: boolean;
+  last_native_observe_at: number | null;
+  native_observe_error: string | null;
   metrics: Record<string, number | string>;
   limits: Record<string, number>;
   generated_at: number;
@@ -100,5 +103,23 @@ export interface Report {
   title: string;
   sha256: string;
   generated_at: number;
+  native_session_url: string | null;
+  native_state: string | null;
+  slack_link: string | null;
   publications: Publication[];
+}
+
+export interface NativeSession {
+  id: number;
+  mode: Mode;
+  tag: string;
+  session_id: string;
+  url: string | null;
+  status: string;
+  status_detail: string;
+  acu_used: number | null;
+  slack_link: string | null;
+  slack_source: string | null;
+  first_seen_at: number;
+  last_seen_at: number;
 }

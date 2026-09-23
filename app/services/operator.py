@@ -306,3 +306,103 @@ def handle_reconcile_task(ctx: ServiceContext, job: sqlite3.Row) -> None:
             dedup_key=f"poll:{session.session_id}",
             max_attempts=ctx.settings.job_max_attempts * 10,
         )
+
+
+# -- verification_update --------------------------------------------------------
+
+def _vu_already_sent(conn: sqlite3.Connection, task_id: int, head_sha: str) -> bool:
+    rows = conn.execute(
+        "SELECT body_json FROM evidence WHERE task_id = ? "
+        "AND kind = 'verification_update'",
+        (task_id,),
+    ).fetchall()
+    for r in rows:
+        body = db.loads(r["body_json"] or "{}", {})
+        if body.get("head_sha") == head_sha and body.get("outcome") == "sent":
+            return True
+    return False
+
+
+def handle_verification_update(ctx: ServiceContext, job: sqlite3.Row) -> None:
+    """One budgeted, deduplicated factual update to the repair session after
+    independent verification — it asks the session to summarize the evidence
+    in its own connected native conversation. Failure is recorded honestly
+    and never corrupts the verified outcome."""
+    conn = ctx.conn
+    payload = db.loads(job["payload_json"])
+    task = get_task(conn, payload["task_id"])
+    head_sha = payload.get("head_sha") or ""
+    checks = payload.get("checks") or {}
+    pr_url = payload.get("pr_url") or task["pr_url"] or ""
+
+    with db.transaction(conn):
+        session_id = task["devin_session_id"]
+        if task["validation"] != "verified" or not session_id or (
+            task["execution"] in ("stop_requested", "stopped", "failed")
+        ):
+            audit(conn, action="vu_skipped", mode=ctx.mode,
+                  task_id=task["id"],
+                  detail=f"no sendable session for verification update "
+                         f"(validation={task['validation']}, "
+                         f"execution={task['execution']})")
+            return
+        if _vu_already_sent(conn, task["id"], head_sha):
+            audit(conn, action="vu_skipped", mode=ctx.mode,
+                  task_id=task["id"],
+                  detail=f"update already sent for head {head_sha[:12]}")
+            return
+        if not budget.can_follow_up(ctx, task["id"]):
+            add_evidence(
+                conn, task_id=task["id"], mode=ctx.mode,
+                kind="verification_update",
+                title="Verification update not sent — budget/capacity",
+                body={"head_sha": head_sha, "outcome": "not_sent",
+                      "reason": "budget_or_capacity"},
+                synthetic=task["synthetic"] == 1,
+            )
+            audit(conn, action="vu_blocked", mode=ctx.mode,
+                  task_id=task["id"],
+                  detail="verification update blocked by budget/capacity")
+            return
+
+    check_summary = ", ".join(f"{k}={v}" for k, v in checks.items()) or "none"
+    text = (
+        f"Repair Desk verification update: the PR was independently "
+        f"verified — required checks green on head {head_sha[:12]}"
+        f" ({check_summary}); PR {pr_url or 'n/a'}. Please summarize this "
+        f"verification evidence in your connected native conversation."
+    )
+    try:
+        ctx.clients.devin.message_session(session_id, text)
+    except Exception as exc:  # noqa: BLE001 - record then let the job retry
+        with db.transaction(conn):
+            add_evidence(
+                conn, task_id=task["id"], mode=ctx.mode,
+                kind="verification_update",
+                title="Verification update failed to send",
+                body={"head_sha": head_sha, "outcome": "failed",
+                      "error": f"{type(exc).__name__}: {exc}"[:300]},
+                synthetic=task["synthetic"] == 1,
+            )
+            audit(conn, action="vu_failed", mode=ctx.mode,
+                  task_id=task["id"],
+                  detail=f"{type(exc).__name__}: {exc}"[:500])
+        raise
+
+    with db.transaction(conn):
+        add_evidence(
+            conn, task_id=task["id"], mode=ctx.mode, kind="verification_update",
+            title="Verification update sent to repair session",
+            body={"head_sha": head_sha, "outcome": "sent", "text": text},
+            synthetic=task["synthetic"] == 1,
+        )
+        audit(conn, action="vu_sent", mode=ctx.mode, task_id=task["id"],
+              detail=f"verification update sent to {session_id} "
+                     f"(head {head_sha[:12]})")
+        jobs.enqueue(
+            conn, "poll_session",
+            {"task_id": task["id"], "session_id": session_id},
+            mode=ctx.mode, delay=ctx.settings.poll_interval_seconds,
+            dedup_key=f"poll:{session_id}",
+            max_attempts=ctx.settings.job_max_attempts * 10,
+        )
