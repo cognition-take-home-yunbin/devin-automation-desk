@@ -32,6 +32,7 @@ from . import (
     dispatch,
     jobs,
     monitor,
+    native,
     operator,
     report_source,
     scanner,
@@ -51,6 +52,8 @@ HANDLERS = {
     "stop_task": operator.handle_stop_task,
     "retry_task": operator.handle_retry_task,
     "reconcile_task": operator.handle_reconcile_task,
+    "observe_native": native.handle_observe,
+    "verification_update": operator.handle_verification_update,
 }
 
 JOB_KINDS = tuple(HANDLERS)
@@ -130,6 +133,27 @@ class Worker:
             return
         jobs.enqueue(conn, "scan_issues", {"scheduled": True}, mode=ctx.mode)
 
+    def _maybe_schedule_native_observe(self, ctx: ServiceContext) -> None:
+        """Native report sessions are observed on the scan cadence — the
+        schedule itself is owned by the external Devin Automation."""
+        conn = ctx.conn
+        row = conn.execute(
+            "SELECT last_native_observe_at FROM control WHERE id = 1"
+        ).fetchone()
+        last = row["last_native_observe_at"] if row else None
+        if last is not None and (
+            db.now() - last < self.settings.scan_interval_seconds
+        ):
+            return
+        pending = conn.execute(
+            "SELECT 1 FROM jobs WHERE kind = 'observe_native' "
+            "AND status IN ('queued', 'claimed') LIMIT 1"
+        ).fetchone()
+        if pending:
+            return
+        jobs.enqueue(conn, "observe_native", {"scheduled": True},
+                     mode=ctx.mode)
+
     # -- main loop ------------------------------------------------------------
 
     def run_once(self, ctx: ServiceContext) -> bool:
@@ -190,6 +214,7 @@ class Worker:
         while not self._stop.is_set():
             try:
                 self._maybe_schedule_scan(ctx)
+                self._maybe_schedule_native_observe(ctx)
                 did_work = self.run_once(ctx)
             except Exception:  # noqa: BLE001 - keep the loop alive
                 log.exception("worker loop error")

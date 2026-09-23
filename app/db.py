@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -282,6 +282,41 @@ CREATE TABLE IF NOT EXISTS cleanup_records (
     detail TEXT,
     created_at REAL NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- Milestone D: native reporting observation + fixtures.
+--
+-- native_sessions rows are READ-ONLY observations of Devin sessions tagged
+-- with NATIVE_REPORT_SESSION_TAG by the external Devin Automation that owns
+-- the daily report + Slack delivery. They are never managed repair attempts
+-- and never imply Slack delivery happened.
+CREATE TABLE IF NOT EXISTS native_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    url TEXT,
+    status TEXT,
+    status_detail TEXT,
+    acu_used REAL,                -- NULL = usage unavailable -> "unknown"
+    slack_link TEXT,              -- operator-recorded only
+    slack_source TEXT,
+    first_seen_at REAL NOT NULL,
+    last_seen_at REAL NOT NULL,
+    UNIQUE (mode, session_id)
+);
+
+-- Simulation fixtures for the native-observation path.
+CREATE TABLE IF NOT EXISTS sim_native_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag TEXT NOT NULL,
+    session_id TEXT NOT NULL UNIQUE,
+    url TEXT,
+    status TEXT,
+    status_detail TEXT,
+    acu_used REAL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -329,6 +364,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("sim_issues", "is_pull_request",
          "ALTER TABLE sim_issues ADD COLUMN is_pull_request "
          "INTEGER NOT NULL DEFAULT 0"),
+        ("control", "last_native_observe_at",
+         "ALTER TABLE control ADD COLUMN last_native_observe_at REAL"),
+        ("control", "native_observe_error",
+         "ALTER TABLE control ADD COLUMN native_observe_error TEXT"),
     ):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column not in cols:

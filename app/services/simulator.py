@@ -27,6 +27,7 @@ SCENARIOS = (
     "report-failure",
     "approval-withdrawn",
     "snapshot-changed",
+    "native-observe-failure",
 )
 
 # Fixed, disjoint issue numbers keep repeated scenario runs idempotent.
@@ -41,6 +42,7 @@ _ISSUE = {
     "report-failure": 107,
     "approval-withdrawn": 109,
     "snapshot-changed": 110,
+    "native-observe-failure": 111,
 }
 
 WORKFLOW = "pilot-validation"
@@ -222,6 +224,20 @@ def seed_scenario(
              settings.report_data_issue_number or 1),
         )
 
+        # One synthetic native-report session — the fake counterpart of the
+        # external Devin Automation's tagged session the observer reads.
+        conn.execute(
+            """INSERT OR IGNORE INTO sim_native_sessions
+               (tag, session_id, url, status, status_detail, acu_used,
+                created_at)
+               VALUES (?, 'sim-native-report-1',
+                       'https://app.devin.example.invalid/sessions/"
+                       "sim-native-report-1',
+                       'finished', 'daily report session completed',
+                       0.75, ?)""",
+            (settings.native_report_session_tag, db.now()),
+        )
+
         if scenario == "happy-path":
             _seed_issue(
                 conn, repo, n,
@@ -370,6 +386,20 @@ def seed_scenario(
             notes.append(
                 "issue content changed after acceptance; dispatch must stop "
                 "for review"
+            )
+
+        elif scenario == "native-observe-failure":
+            _seed_issue(
+                conn, repo, n,
+                "Stacked bar chart mixes up percentage axes",
+                labels=[cand, appr], approved_by=approver, approval_label=appr,
+            )
+            _seed_checks(conn, repo, n, CHECKS_OK)
+            _script_error(conn, "devin.list_sessions_by_tag",
+                          "boom", times=3)
+            notes.append(
+                "native observation fails 3x; native_observe_error is set "
+                "and the dashboard marks the native feed unavailable"
             )
 
         # Scan jobs dedupe at the task level, so a plain enqueue is correct —

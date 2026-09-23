@@ -14,6 +14,7 @@ from ..models import (
     AuditEventOut,
     EvidenceOut,
     HealthOut,
+    NativeSessionOut,
     OverviewOut,
     ReportOut,
     SimulationResult,
@@ -124,6 +125,12 @@ def overview(request: Request, conn: sqlite3.Connection = Conn) -> OverviewOut:
     last_scan = control["last_scan_at"]
     scan_age = (db.now() - last_scan) if last_scan else None
     scan_fresh = scan_age is not None and scan_age < 3 * s.scan_interval_seconds
+    last_pub = control["last_publish_at"]
+    publish_age = (db.now() - last_pub) if last_pub else None
+    publish_fresh = (
+        publish_age is not None
+        and publish_age < s.report_stale_after_seconds
+    )
     budget_held = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) AS a FROM budget_reservations "
         "WHERE mode = ? AND status = 'held'",
@@ -137,6 +144,9 @@ def overview(request: Request, conn: sqlite3.Connection = Conn) -> OverviewOut:
         last_publish_at=control["last_publish_at"],
         scan_age_seconds=scan_age,
         scan_fresh=scan_fresh,
+        publish_fresh=publish_fresh,
+        last_native_observe_at=control["last_native_observe_at"],
+        native_observe_error=control["native_observe_error"],
         generated_at=db.now(),
         metrics={
             "budget_held_acu": float(budget_held),
@@ -294,10 +304,39 @@ def list_reports(
                 id=r["id"], mode=r["mode"], report_type=r["report_type"],
                 schema_version=r["schema_version"], title=r["title"],
                 sha256=r["sha256"], generated_at=r["generated_at"],
+                native_session_url=r["native_session_url"],
+                native_state=r["native_state"],
+                slack_link=r["slack_link"],
                 publications=pubs,
             )
         )
     return out
+
+
+@router.get("/api/native-sessions", response_model=list[NativeSessionOut])
+def list_native_sessions(
+    request: Request, conn: sqlite3.Connection = Conn
+) -> list[NativeSessionOut]:
+    """Read-only observations of the external reporting automation's
+    sessions — deliberately separate from managed repair attempts."""
+    s = request.app.state.settings
+    rows = conn.execute(
+        "SELECT * FROM native_sessions WHERE mode = ? "
+        "ORDER BY last_seen_at DESC",
+        (s.app_mode,),
+    ).fetchall()
+    return [
+        NativeSessionOut(
+            id=r["id"], mode=r["mode"], tag=r["tag"],
+            session_id=r["session_id"], url=r["url"],
+            status=r["status"], status_detail=r["status_detail"],
+            acu_used=r["acu_used"], slack_link=r["slack_link"],
+            slack_source=r["slack_source"],
+            first_seen_at=r["first_seen_at"],
+            last_seen_at=r["last_seen_at"],
+        )
+        for r in rows
+    ]
 
 
 @router.get("/api/reports/{report_id}")

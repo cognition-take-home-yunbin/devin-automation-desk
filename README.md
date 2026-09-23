@@ -1,4 +1,4 @@
-# Devin Repair Desk — milestone C
+# Devin Repair Desk — milestone D
 
 Turns maintainer-approved, reproducible Apache Superset bugs (on the
 configured fork) into Devin-authored PRs — a scheduled scanner admits
@@ -7,12 +7,24 @@ approved issues, the desk creates a bounded Devin session per issue via the
 against a versioned policy, shows everything on a dashboard, and publishes
 sanitized report facts to a fixed report-source issue.
 
-Milestone C hardens the verifier and the operator surface: repository/base-
-branch scope checks, a head re-fetch before any verdict, workflow-change
-flags, a documented manual-verification fallback (recorded evidence — never
-"CI verified"), and a polished overview + task drawer that keeps
-agent-reported assertions visibly separate from independently retrieved
-facts.
+Milestone D delivers the revised **native reporting** design: deterministic
+time-windowed snapshots (today / previous local day / rolling 7d in
+`REPORT_TIMEZONE`), publication to the one pre-created report-source issue
+with destination validation + read-back reconcile, and read-only
+observation of the external Devin Automation that owns the daily Slack
+post — plus one budgeted verification update back to the repair session.
+
+## Three automations, three owners
+
+| | Managed repair automation (this app) | Native collaboration | Native reports (external) |
+| --- | --- | --- | --- |
+| What | scan → dispatch → poll → verify → publish | per-repair Slack conversation attached to the repair session | daily summary posted to Slack |
+| Who runs it | this app's single worker | Devin's native Slack integration on the API session | a **native Devin Automation** you configure once |
+| Budget/schedule | `*_ACU_LIMIT` reservations + `SCAN_INTERVAL_SECONDS` | operator-driven, not a managed call | the automation's own schedule + sessions |
+| The app… | owns it entirely | sends one bounded update; never drives the thread | only *observes* tagged sessions read-only; never infers delivery |
+
+Setup for the native report: **`docs/native-reporting.md`**; the versioned
+prompt it runs: **`docs/reporting-playbook.md`**.
 
 ## Quick start (simulation — no secrets needed)
 
@@ -54,6 +66,9 @@ python -m app.cli verify-manual TASK_ID \      # CI-unavailable fallback:
     --operator NAME --head-sha SHA \          #   record operator evidence —
     --command CMD --results TEXT --evidence U #   validation=manually_verified
 python -m app.cli slack-link TASK_ID URL       # record the native Slack thread
+python -m app.cli publish-report-source        # publish to the fixed issue now
+python -m app.cli native-link SID URL \        # operator-verified slack link on a
+    --session-url U --operator NAME            #   native report session
 python -m app.cli export-evidence [--output D] # JSON evidence bundle
 ```
 
@@ -62,7 +77,7 @@ Simulating a scenario only *adds* synthetic state; it never resets.
 
 Scenarios: `happy-path`, `duplicate-scan`, `needs-input`, `checks-failed`,
 `creation-unknown`, `throttled`, `stale-checks`, `report-failure`,
-`approval-withdrawn`, `snapshot-changed`.
+`approval-withdrawn`, `snapshot-changed`, `native-observe-failure`.
 
 ## Modes & isolation
 
@@ -134,9 +149,31 @@ ambiguous writes) the live clients surface.
   are all required. The task lands `validation=manually_verified`, a
   distinct state that is **never** presented as CI-verified, with a
   `manual_verification` evidence row labelled as such.
-- **Reports**: deterministic facts snapshots (schema version + sha256)
-  published via `REPORT_GITHUB_TOKEN` to one fixed report-source issue;
-  publication failure never changes the remediation outcome.
+- **Reports (managed → native boundary)**: deterministic snapshots over
+  three windows — today-to-date, previous local day, rolling 7d — computed
+  in `REPORT_TIMEZONE` with exact UTC boundaries. `sha256` covers canonical
+  content *excluding* generation time, so identical data is identical:
+  publication is skipped unless the hash materially changed or
+  `REPORT_PUBLISH_INTERVAL_SECONDS` elapsed. The body embeds a
+  `report-sha256` marker; ambiguous writes reconcile by **reading the
+  issue back**, and the destination is re-validated each cycle (open issue
+  in `REPORT_GITHUB_REPO`, never a PR). Credential-shaped strings are
+  scrubbed; snapshots carry evidence links, explicit unknowns, and
+  managed-vs-native coverage — never secrets, Slack bodies, or raw logs.
+  Snapshots persist locally; history is never rewritten.
+- **Native observation**: sessions tagged `NATIVE_REPORT_SESSION_TAG` (the
+  external reporting automation) are listed read-only into
+  `native_sessions` on the scan cadence — separate from managed attempts.
+  Usage the API can't return stays `unknown`, observation failure surfaces
+  as `native_observe_error` + a dashboard badge, and a session's status
+  never implies Slack delivery — only an operator-recorded `native-link`
+  permalink does.
+- **Verification update**: after `validation=verified`, one budgeted,
+  deduplicated `verification_update` job posts a factual update to the
+  repair session asking it to summarize the evidence in its connected
+  native conversation. State/cap/capacity checks run first; a blocked or
+  failed send is recorded as evidence without corrupting the outcome.
+- **Reports**: publication failure never changes the remediation outcome.
 
 ## Layout
 
@@ -144,7 +181,7 @@ ambiguous writes) the live clients surface.
 app/
   main.py            ASGI app + lifespan (starts the one worker)
   config.py          §10.4 contract, fail-closed loading, doctor
-  db.py              SQLite schema v2 + WAL + transaction helpers
+  db.py              SQLite schema v3 + WAL + transaction helpers
   states.py          4 state dimensions + transition map
   transitions.py     audited state transitions + evidence writes
   cli.py             operator CLI (never starts a worker)
@@ -152,15 +189,18 @@ app/
   clients/{base,fakes,github,devin,factory}.py
   services/{scanner,dispatch,monitor,verification,reporting,
             report_source,jobs,worker,simulator,context,policy,
-            operator,budget}.py
+            operator,budget,native}.py
 frontend/            React + TS + Vite dashboard (built into the image)
 config/verification.yaml   versioned verification policy
-tests/               pytest: states, jobs, config, all 10 scenarios,
+tests/               pytest: states, jobs, config, all 11 scenarios,
                      milestone-B integrity/budget/operator paths,
-                     milestone-C verifier/manual-verify/flags
-scripts/test.sh      backend tests + typecheck + frontend build
-docs/architecture.md        component view + mermaid diagram
-docs/native-slack-sync.md   Slack-on-API-session feasibility note
+                     milestone-C verifier/manual-verify/flags,
+                     milestone-D windows/publication/native/update
+docs/architecture.md         component view + mermaid diagram
+docs/native-slack-sync.md    Slack-on-API-session feasibility note
+docs/native-reporting.md     native report automation setup guide
+docs/reporting-playbook.md   versioned prompt for the report automation
+docs/recovery.md             restart/failure recovery runbook
 ```
 
 ## Current limitations
@@ -173,6 +213,17 @@ docs/native-slack-sync.md   Slack-on-API-session feasibility note
 - `daily_acu_usage` (enterprise consumption API) degrades to `None` when
   the service user lacks the scope — budget accounting then relies on the
   local reservation ledger only.
+- The daily report's schedule, Slack delivery and generation live in the
+  external Devin Automation by design — the app intentionally does not
+  implement them (`docs/native-reporting.md`). Simulation fakes the
+  observation surface; it does not purport to test the real Slack
+  integration or real schedule.
+- `list_sessions_by_tag` requires API permission to list org sessions;
+  without it native sessions show as unavailable (error surfaced), never
+  silently empty.
+- Actual delivery of the verification update into the session's native
+  conversation is confirmed by inspecting the session — the desk records
+  the API send, never assumes the post landed.
 - The dashboard is read-only; operator actions go through the CLI.
 - `manually_verified` tasks were operator-verified, not CI-verified — the
   UI and exports keep that distinction.

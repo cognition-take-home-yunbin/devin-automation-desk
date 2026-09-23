@@ -93,7 +93,25 @@ class ReportOut(BaseModel):
     title: str
     sha256: str
     generated_at: float
+    native_session_url: str | None = None
+    native_state: str | None = None
+    slack_link: str | None = None
     publications: list[dict]
+
+
+class NativeSessionOut(BaseModel):
+    id: int
+    mode: str
+    tag: str
+    session_id: str
+    url: str | None
+    status: str
+    status_detail: str
+    acu_used: float | None  # None renders as "unknown" in the UI
+    slack_link: str | None
+    slack_source: str | None
+    first_seen_at: float
+    last_seen_at: float
 
 
 class OverviewOut(BaseModel):
@@ -104,6 +122,9 @@ class OverviewOut(BaseModel):
     last_publish_at: float | None
     scan_age_seconds: float | None
     scan_fresh: bool
+    publish_fresh: bool
+    last_native_observe_at: float | None
+    native_observe_error: str | None
     metrics: dict
     limits: dict
     generated_at: float

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
-import type { Overview, Report, TaskDetail, TaskSummary } from "./types";
+import type {
+  NativeSession,
+  Overview,
+  Report,
+  TaskDetail,
+  TaskSummary,
+} from "./types";
 import TaskDrawer from "./components/TaskDrawer";
 import { fmtAgo, fmtTime, stateChipClass, stateIcon } from "./util";
 
@@ -21,6 +27,7 @@ export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [nativeSessions, setNativeSessions] = useState<NativeSession[]>([]);
   const [selected, setSelected] = useState<TaskDetail | null>(null);
   const [stale, setStale] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,14 +36,16 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [o, t, r] = await Promise.all([
+      const [o, t, r, n] = await Promise.all([
         api.overview(),
         api.tasks(),
         api.reports(),
+        api.nativeSessions(),
       ]);
       setOverview(o);
       setTasks(t);
       setReports(r);
+      setNativeSessions(n);
       setStale(false);
       setError(null);
       if (selected) {
@@ -89,6 +98,19 @@ export default function App() {
             SCAN STALE
             {overview.scan_age_seconds != null &&
               ` ${Math.round(overview.scan_age_seconds)}s`}
+          </span>
+        )}
+        {overview && !overview.publish_fresh && (
+          <span className="badge stale-scan" title="no confirmed report publication within the staleness window">
+            REPORT STALE
+          </span>
+        )}
+        {overview?.native_observe_error && (
+          <span
+            className="badge stale-scan"
+            title={overview.native_observe_error}
+          >
+            NATIVE OBS UNAVAILABLE
           </span>
         )}
         <span className="repo" title="Configured repository">
@@ -251,6 +273,7 @@ export default function App() {
                   <th>sha256</th>
                   <th>Generated</th>
                   <th>Publications</th>
+                  <th>Native evidence</th>
                 </tr>
               </thead>
               <tbody>
@@ -271,6 +294,74 @@ export default function App() {
                             </div>
                           ))}
                     </td>
+                    <td className="small">
+                      {r.native_session_url && (
+                        <a href={r.native_session_url}>
+                          session ({r.native_state ?? "unknown"})
+                        </a>
+                      )}{" "}
+                      {r.slack_link && <a href={r.slack_link}>slack</a>}
+                      {!r.native_session_url && !r.slack_link && "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Native report sessions</h2>
+          <p className="small">
+            Read-only observations of the external reporting automation —
+            separate from managed repair attempts. A session&apos;s status
+            says nothing about Slack delivery; only an operator-recorded
+            link does.
+          </p>
+          {nativeSessions.length === 0 ? (
+            <div className="empty">
+              No native report sessions observed
+              {overview?.native_observe_error
+                ? ` — observation unavailable: ${overview.native_observe_error}`
+                : overview?.last_native_observe_at == null
+                  ? " yet."
+                  : ` (last checked ${fmtAgo(overview.last_native_observe_at)}).`}
+            </div>
+          ) : (
+            <table aria-label="native report sessions">
+              <thead>
+                <tr>
+                  <th>Session</th>
+                  <th>Status</th>
+                  <th>Detail</th>
+                  <th>ACUs</th>
+                  <th>Slack</th>
+                  <th>Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nativeSessions.map((n) => (
+                  <tr key={n.id}>
+                    <td>
+                      {n.url ? (
+                        <a href={n.url}>{n.session_id}</a>
+                      ) : (
+                        n.session_id
+                      )}
+                    </td>
+                    <td>
+                      <StateChip state={n.status} />
+                    </td>
+                    <td className="small">{n.status_detail || "—"}</td>
+                    <td>{n.acu_used ?? "unknown"}</td>
+                    <td>
+                      {n.slack_link ? (
+                        <a href={n.slack_link}>slack</a>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td>{fmtAgo(n.last_seen_at)}</td>
                   </tr>
                 ))}
               </tbody>
