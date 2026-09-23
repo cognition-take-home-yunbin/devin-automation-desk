@@ -118,7 +118,10 @@ native conversation" never tangles with the task outcome.
   creation_unknown reconciles back into working; `stop_requested` is the
   terminal-in-progress state.
 - **validation**: no_pr → pr_found → checks_pending → verified /
-  checks_failed / unknown. An empty check list is never success.
+  checks_failed / unknown, or → manually_verified (operator-recorded
+  evidence — never presented as CI-verified). An empty check list is
+  never success, and a verified PR re-opens to checks_pending on a
+  new head push.
 - **review**: unknown → awaiting_review → changes_requested / approved →
   merged / closed_unmerged.
 - **disposition**: active → delivered / blocked / failed / cancelled.
@@ -148,6 +151,18 @@ raise.
   `acus_consumed` at terminal, or `released` on throttle/no-create. Caps
   check `held + consumed` — never just dispensed session IDs.
 - Polling preserves unfamiliar statuses instead of forcing failure/success.
+- **Independent verification (F09)**: the verifier confirms the PR targets
+  the configured repo + base branch (out-of-scope targets → flag +
+  blocked), requires every policy check `success` on the fetched head SHA
+  with trusted workflow provenance, and re-reads the head before the
+  verdict — a mid-verification push requeues instead of certifying a stale
+  commit. Unnamed provenance → `workflow_changed` flag. The agent's claims
+  (PR, head SHA) stay in evidence as `verifier=agent` assertions, separate
+  from `github-verifier` facts.
+- **Manual fallback**: `verify-manual` records operator evidence
+  (operator, exact SHA, command, results, evidence URI — all required)
+  and lands `validation=manually_verified`, a distinct state that never
+  reads as CI-verified.
 - Operator `stop` is permanent (`archive=true`) and preserves outcome;
   `retry` needs a recorded reason + no live session + no existing PR.
 - Report publication failure never changes the remediation outcome.

@@ -83,6 +83,9 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 title="Session requested human input",
                 body=session.notes or {"status_detail": session.status_detail},
                 uri=session.url, synthetic=task["synthetic"] == 1,
+                # A session-reported question is the agent's assertion —
+                # stored and shown separately from verified facts.
+                verifier="agent",
             )
         return
 
@@ -162,7 +165,15 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 conn, task_id=task["id"], attempt_id=attempt_id,
                 mode=ctx.mode, kind="artifact",
                 title=f"Pull request opened: {session.pr_url}",
+                body={
+                    # Agent-reported assertions — the verifier independently
+                    # re-fetches all of these before 'verified' is granted.
+                    "pr_number": session.pr_number,
+                    "pr_url": session.pr_url,
+                    "claimed_head_sha": session.pr_head_sha,
+                },
                 uri=session.pr_url, synthetic=task["synthetic"] == 1,
+                verifier="agent",
             )
             jobs.enqueue(
                 conn, "verify_task",

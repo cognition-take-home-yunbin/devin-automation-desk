@@ -29,6 +29,7 @@ VALIDATION_STATES = (
     "checks_pending",
     "checks_failed",
     "verified",
+    "manually_verified",  # operator-recorded evidence — never "CI verified"
     "unknown",
 )
 REVIEW_STATES = (
@@ -69,11 +70,15 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "validation": {
         "no_pr": ("pr_found", "unknown"),
-        "pr_found": ("checks_pending", "checks_failed", "unknown"),
-        "checks_pending": ("verified", "checks_failed", "unknown"),
-        "checks_failed": ("checks_pending", "unknown"),
+        "pr_found": ("checks_pending", "checks_failed", "manually_verified",
+                     "unknown"),
+        "checks_pending": ("verified", "checks_failed", "manually_verified",
+                           "unknown"),
+        "checks_failed": ("checks_pending", "manually_verified", "unknown"),
         "verified": ("checks_pending",),  # a new head push re-opens validation
-        "unknown": ("pr_found", "checks_pending", "verified", "checks_failed"),
+        "manually_verified": ("checks_pending", "unknown"),
+        "unknown": ("pr_found", "checks_pending", "verified",
+                    "manually_verified", "checks_failed"),
     },
     "review": {
         "unknown": ("awaiting_review",),
@@ -90,7 +95,7 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "disposition": {
         "active": ("delivered", "blocked", "failed", "cancelled"),
-        "blocked": ("active", "failed", "cancelled"),
+        "blocked": ("active", "delivered", "failed", "cancelled"),
         "delivered": (),
         "failed": ("active", "cancelled"),
         "cancelled": ("active",),

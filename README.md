@@ -1,4 +1,4 @@
-# Devin Repair Desk — milestone B
+# Devin Repair Desk — milestone C
 
 Turns maintainer-approved, reproducible Apache Superset bugs (on the
 configured fork) into Devin-authored PRs — a scheduled scanner admits
@@ -7,10 +7,12 @@ approved issues, the desk creates a bounded Devin session per issue via the
 against a versioned policy, shows everything on a dashboard, and publishes
 sanitized report facts to a fixed report-source issue.
 
-Milestone B adds the **live path**: real GitHub/Devin clients, the
-approval-integrity re-check before dispatch, reservation-based ACU budgets,
-the full operator CLI, and the handoff/cleanup ledger — while simulation
-mode still runs the entire pipeline credential-free on fake providers.
+Milestone C hardens the verifier and the operator surface: repository/base-
+branch scope checks, a head re-fetch before any verdict, workflow-change
+flags, a documented manual-verification fallback (recorded evidence — never
+"CI verified"), and a polished overview + task drawer that keeps
+agent-reported assertions visibly separate from independently retrieved
+facts.
 
 ## Quick start (simulation — no secrets needed)
 
@@ -48,6 +50,9 @@ python -m app.cli message TASK_ID TEXT         # budgeted follow-up to the sessi
 python -m app.cli stop TASK_ID [--reason R]    # permanent terminate (archive=true)
 python -m app.cli retry TASK_ID --reason R     # intentional re-dispatch
 python -m app.cli reconcile TASK_ID            # find session by correlation tag
+python -m app.cli verify-manual TASK_ID \      # CI-unavailable fallback:
+    --operator NAME --head-sha SHA \          #   record operator evidence —
+    --command CMD --results TEXT --evidence U #   validation=manually_verified
 python -m app.cli slack-link TASK_ID URL       # record the native Slack thread
 python -m app.cli export-evidence [--output D] # JSON evidence bundle
 ```
@@ -111,8 +116,24 @@ ambiguous writes) the live clients surface.
   `slack-link` records the operator-created thread per task.
 - **Serial pilot**: `MAX_ACTIVE_SESSIONS=1` — one managed session at a
   time; further dispatch requeues until the slot frees.
-- **Verification**: policy from `VERIFICATION_POLICY_PATH`; missing/failed/
-  untrusted/stale checks never verify; head SHA is re-fetched at verify time.
+- **Verification**: policy from `VERIFICATION_POLICY_PATH`. The verifier
+  checks the PR targets the configured repo + base branch (out-of-scope
+  targets are flagged and blocked), requires every named check to be
+  `success` on the current head SHA and produced by a trusted workflow, and
+  re-reads the head before the verdict — a mid-verification push re-opens
+  the cycle instead of certifying a stale commit. Check-run provenance the
+  policy doesn't name is flagged (`workflow_changed`), missing/skipped/
+  neutral/failed/untrusted checks never verify.
+- **Assertions vs facts**: evidence the session produced (`verifier=agent`)
+  is stored and displayed separately from independently retrieved facts
+  (`verifier=github-verifier`). The agent's claimed head SHA is recorded as
+  `claimed_head_sha` inside the assertion, never as a verified field.
+- **Manual verification fallback** (`verify-manual`): when CI is
+  unavailable an operator can record verification — `--operator`,
+  `--head-sha` (exact SHA), `--command`, `--results`, `--evidence` (URI)
+  are all required. The task lands `validation=manually_verified`, a
+  distinct state that is **never** presented as CI-verified, with a
+  `manual_verification` evidence row labelled as such.
 - **Reports**: deterministic facts snapshots (schema version + sha256)
   published via `REPORT_GITHUB_TOKEN` to one fixed report-source issue;
   publication failure never changes the remediation outcome.
@@ -135,7 +156,8 @@ app/
 frontend/            React + TS + Vite dashboard (built into the image)
 config/verification.yaml   versioned verification policy
 tests/               pytest: states, jobs, config, all 10 scenarios,
-                     milestone-B integrity/budget/operator paths
+                     milestone-B integrity/budget/operator paths,
+                     milestone-C verifier/manual-verify/flags
 scripts/test.sh      backend tests + typecheck + frontend build
 docs/architecture.md        component view + mermaid diagram
 docs/native-slack-sync.md   Slack-on-API-session feasibility note
@@ -152,3 +174,5 @@ docs/native-slack-sync.md   Slack-on-API-session feasibility note
   the service user lacks the scope — budget accounting then relies on the
   local reservation ledger only.
 - The dashboard is read-only; operator actions go through the CLI.
+- `manually_verified` tasks were operator-verified, not CI-verified — the
+  UI and exports keep that distinction.

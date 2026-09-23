@@ -77,6 +77,9 @@ class PullRequest:
     url: str
     base_branch: str
     head_sha: str
+    base_repo: str = ""       # repository the PR targets — out-of-scope when
+                              # it isn't the configured repair repo
+    head_repo: str = ""       # repository the head branch lives on
     state: str = "open"
 
 

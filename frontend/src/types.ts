@@ -34,6 +34,8 @@ export interface Attempt {
   raw_detail: string | null;
   acu_limit: number | null;
   acu_used: number | null;
+  prompt_hash: string | null;
+  context_hash: string | null;
   started_at: number;
   finished_at: number | null;
 }

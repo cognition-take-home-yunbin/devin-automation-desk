@@ -136,12 +136,25 @@ class FakeGitHubClient:
         ).fetchone()
         script = db.loads(r["script_json"], {}) if r else {}
         sha = script.get("pr_head_sha", f"simsha{pr_number:034d}"[:40])
+        seq = script.get("pr_head_sha_seq") or []
+        if seq:
+            # A scripted head history — each read observes the next head, so
+            # tests can script a push mid-verification (stale-head race).
+            sha = seq[0]
+            if len(seq) > 1:
+                script["pr_head_sha_seq"] = seq[1:]
+                self.conn.execute(
+                    "UPDATE sim_sessions SET script_json = ? WHERE id = ?",
+                    (db.dumps(script), r["id"]),
+                )
         return PullRequest(
             repo=repo,
             number=pr_number,
             url=f"https://github.example.invalid/{repo}/pull/{pr_number}",
             base_branch=script.get("base_branch", "master"),
+            base_repo=script.get("base_repo", repo),
             head_sha=sha,
+            head_repo=script.get("head_repo", repo),
             state="open",
         )
 

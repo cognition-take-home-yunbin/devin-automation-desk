@@ -62,6 +62,8 @@ class AttemptOut(BaseModel):
     raw_detail: str | None
     acu_limit: int | None
     acu_used: float | None
+    prompt_hash: str | None
+    context_hash: str | None
     started_at: float
     finished_at: float | None
 

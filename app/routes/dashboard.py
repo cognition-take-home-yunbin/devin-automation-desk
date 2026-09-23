@@ -147,6 +147,10 @@ def overview(request: Request, conn: sqlite3.Connection = Conn) -> OverviewOut:
                 or t["disposition"] == "blocked"
             ),
             "verified_prs": count(lambda t: t["validation"] == "verified"),
+            "manually_verified": count(
+                lambda t: t["validation"] == "manually_verified"
+            ),
+            "blocked": count(lambda t: t["disposition"] == "blocked"),
             "merged_prs": count(lambda t: t["review"] == "merged"),
             "observed_acus": acu["total"],
             "acus_scope": "cumulative ACUs for included sessions",
@@ -214,6 +218,8 @@ def task_detail(
             raw_detail=a["raw_detail"],
             acu_limit=a["acu_limit"],
             acu_used=a["acu_used"],
+            prompt_hash=a["prompt_hash"],
+            context_hash=a["context_hash"],
             started_at=a["started_at"],
             finished_at=a["finished_at"],
         )

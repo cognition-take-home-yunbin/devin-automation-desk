@@ -165,6 +165,118 @@ def cmd_reconcile(args) -> int:
     return 0
 
 
+def cmd_verify_manual(args) -> int:
+    """`verify-manual TASK_ID ...` — record operator-performed verification.
+
+    Fallback for when CI is unavailable. This records an operator's
+    verification evidence — never 'CI verified'. The task's validation moves
+    to ``manually_verified`` (a distinct state), the evidence row carries the
+    operator, the exact head SHA, the command and results, and the evidence
+    location so a reviewer can re-run it.
+    """
+    from .transitions import add_evidence, get_task, transition_task
+
+    settings = _settings()
+    conn = _connect(settings)
+    task = _find_task(conn, settings, args.task_id)
+
+    if not task["pr_number"]:
+        print(
+            f"task {task['id']} has no PR — nothing to manually verify",
+            file=sys.stderr,
+        )
+        return 2
+    if task["validation"] in ("verified", "manually_verified"):
+        print(
+            f"task {task['id']} is already {task['validation']}; "
+            "refusing to overwrite an existing verification",
+            file=sys.stderr,
+        )
+        return 2
+    if task["validation"] == "no_pr":
+        print(
+            f"task {task['id']} has validation=no_pr — verify needs a "
+            "PR first",
+            file=sys.stderr,
+        )
+        return 2
+
+    head_mismatch = (
+        task["head_sha"]
+        and task["head_sha"].lower() != args.head_sha.lower()
+    )
+    if head_mismatch:
+        print(
+            f"warning: --head-sha {args.head_sha[:12]} differs from the "
+            f"task's recorded head {task['head_sha'][:12]} — recording the "
+            "operator's SHA as a claim, review carefully",
+            file=sys.stderr,
+        )
+
+    with db.transaction(conn):
+        add_evidence(
+            conn, task_id=task["id"], mode=settings.app_mode,
+            kind="manual_verification",
+            title=(
+                f"Manually verified by {args.operator} — NOT CI verified"
+            ),
+            body={
+                "operator": args.operator,
+                "head_sha": args.head_sha,
+                "command": args.command,
+                "results": args.results,
+                "evidence_uri": args.evidence,
+                "recorded_head_sha": task["head_sha"],
+                "head_matches_record": not head_mismatch,
+                "caveat": (
+                    "operator-recorded verification; CI verification "
+                    "was unavailable — this is not 'CI verified'"
+                ),
+            },
+            uri=args.evidence,
+            synthetic=task["synthetic"] == 1,
+            verifier=f"manual:{args.operator}",
+        )
+        audit(
+            conn, action="manual_verification_recorded",
+            mode=settings.app_mode, task_id=task["id"], source="operator",
+            detail=(
+                f"{args.operator} verified head {args.head_sha} via "
+                f"`{args.command}` — evidence: {args.evidence}"
+            ),
+        )
+        transition_task(
+            conn, get_task(conn, task["id"]), "validation",
+            "manually_verified",
+            detail="operator-recorded evidence — not CI verified",
+        )
+        row = get_task(conn, task["id"])
+        if row["review"] == "unknown":
+            transition_task(
+                conn, row, "review", "awaiting_review",
+                detail="manually verified — awaiting human review",
+            )
+            row = get_task(conn, task["id"])
+        if row["disposition"] in ("active", "blocked"):
+            transition_task(
+                conn, row, "disposition", "delivered",
+                detail="delivered on manual verification",
+            )
+        jobs.enqueue(
+            conn, "publish_report", {"task_id": task["id"]},
+            mode=settings.app_mode,
+            dedup_key=f"report:{settings.app_mode}:{task['id']}:"
+                      f"{task['pr_number']}",
+            max_attempts=settings.job_max_attempts,
+        )
+    print(
+        f"task {task['id']}: validation -> manually_verified "
+        f"(operator={args.operator}, head={args.head_sha[:12]}) — "
+        "recorded as manual evidence, not CI verified"
+    )
+    return 0
+
+
 def cmd_slack_link(args) -> int:
     """Record the native Slack thread link on a task (manual bookkeeping)."""
     settings = _settings()
@@ -321,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m app.cli",
         description="Devin Repair Desk operator CLI (never starts a worker)",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # dest must not collide with verify-manual's own --command option.
+    sub = parser.add_subparsers(dest="action", required=True)
 
     sub.add_parser("doctor", help="read-only configuration/health check")
     sim = sub.add_parser("simulate", help="seed a simulation scenario")
@@ -350,6 +463,22 @@ def main(argv: list[str] | None = None) -> int:
     rec = sub.add_parser(
         "reconcile", help="find the task's session by correlation tag")
     rec.add_argument("task_id", type=int)
+    vm = sub.add_parser(
+        "verify-manual",
+        help="record operator verification when CI is unavailable "
+             "(never 'CI verified')",
+    )
+    vm.add_argument("task_id", type=int)
+    vm.add_argument("--operator", required=True,
+                    help="operator name accountable for the record")
+    vm.add_argument("--head-sha", required=True, dest="head_sha",
+                    help="exact commit SHA that was verified")
+    vm.add_argument("--command", required=True,
+                    help="command(s) the operator ran")
+    vm.add_argument("--results", required=True,
+                    help="observed results of the command(s)")
+    vm.add_argument("--evidence", required=True,
+                    help="URL/path where the verification evidence lives")
     slack = sub.add_parser(
         "slack-link", help="record the native Slack thread URL on a task")
     slack.add_argument("task_id", type=int)
@@ -369,9 +498,10 @@ def main(argv: list[str] | None = None) -> int:
         "stop": cmd_stop,
         "retry": cmd_retry,
         "reconcile": cmd_reconcile,
+        "verify-manual": cmd_verify_manual,
         "slack-link": cmd_slack_link,
     }
-    return handlers[args.command](args)
+    return handlers[args.action](args)
 
 
 if __name__ == "__main__":
