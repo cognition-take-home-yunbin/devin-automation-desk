@@ -21,6 +21,7 @@ const SCENARIOS = [
   "report-failure",
   "approval-withdrawn",
   "snapshot-changed",
+  "native-observe-failure",
 ];
 
 export default function App() {

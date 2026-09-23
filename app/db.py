@@ -255,6 +255,11 @@ CREATE TABLE IF NOT EXISTS sim_report_issue (
     body TEXT NOT NULL DEFAULT '',
     updated_at REAL
 );
+DELETE FROM sim_report_issue WHERE id NOT IN (
+    SELECT MIN(id) FROM sim_report_issue GROUP BY repo, issue_number
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sim_report_issue_dest
+    ON sim_report_issue (repo, issue_number);
 
 -- ---------------------------------------------------------------------------
 -- Milestone B: reservation-based managed spending + operator cleanup ledger.

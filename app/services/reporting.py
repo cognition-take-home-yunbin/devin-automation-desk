@@ -39,9 +39,9 @@ SHA_MARKER_RE = re.compile(r"<!--\s*report-sha256:([0-9a-f]{64})\s*-->")
 # Credential-shaped strings must never reach the published body, even if a
 # field upstream picked one up by accident.
 _SECRET_PATTERNS = re.compile(
-    r"(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|gho_[A-Za-z0-9]{8,}|"
-    r"github_pat_[A-Za-z0-9_]{8,}|Bearer\s+[A-Za-z0-9._-]{10,}|"
-    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
+    r"((?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9]{8,}|"
+    r"gho_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|"
+    r"Bearer\s+[A-Za-z0-9._-]{10,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
 )
 
 
