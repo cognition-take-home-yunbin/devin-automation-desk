@@ -158,6 +158,11 @@ button:focus-visible, a:focus-visible, select:focus-visible {
 button:disabled { opacity: 0.55; cursor: default; }
 button:disabled:hover { border-color: var(--border); color: inherit; }
 .scan-now { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.delete-task {
+  font-size: 11px; padding: 2px 8px; color: var(--bad);
+  border-color: var(--bad-soft, #f3c1bd);
+}
+.delete-task:hover { border-color: var(--bad); color: var(--bad); }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .small { font-size: 12px; color: var(--muted); }

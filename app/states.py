@@ -40,7 +40,8 @@ REVIEW_STATES = (
     "closed_unmerged",
     "unknown",
 )
-DISPOSITION_STATES = ("active", "delivered", "blocked", "failed", "cancelled")
+DISPOSITION_STATES = (
+    "active", "delivered", "blocked", "failed", "cancelled", "deleted")
 
 DIMENSIONS = ("execution", "validation", "review", "disposition")
 
@@ -94,11 +95,14 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
         "closed_unmerged": (),
     },
     "disposition": {
-        "active": ("delivered", "blocked", "failed", "cancelled"),
-        "blocked": ("active", "delivered", "failed", "cancelled"),
-        "delivered": (),
-        "failed": ("active", "cancelled"),
-        "cancelled": ("active",),
+        "active": ("delivered", "blocked", "failed", "cancelled", "deleted"),
+        "blocked": ("active", "delivered", "failed", "cancelled", "deleted"),
+        "delivered": ("deleted",),
+        "failed": ("active", "cancelled", "deleted"),
+        "cancelled": ("active", "deleted"),
+        # Terminal operator action — the record stays for dedup/audit but
+        # the task is out of tracking permanently.
+        "deleted": (),
     },
 }
 

@@ -129,3 +129,8 @@ export interface ScanRequestResult {
   job_id: number | null;
   queued: boolean;
 }
+
+export interface TaskDeleteResult {
+  id: number;
+  disposition: string;
+}

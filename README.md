@@ -224,9 +224,11 @@ docs/recovery.md             restart/failure recovery runbook
 - Actual delivery of the verification update into the session's native
   conversation is confirmed by inspecting the session — the desk records
   the API send, never assumes the post landed.
-- The dashboard is read-only except **Scan now** (a human override that
-  enqueues the same durable `scan_issues` job as `cli scan now`; dispatch
-  stays gated by pause/budgets/approval) — every other operator action
-  goes through the CLI.
+- The dashboard is read-only except two human overrides: **Scan now**
+  (enqueues the same durable `scan_issues` job as `cli scan now`;
+  dispatch stays gated by pause/budgets/approval) and **delete**
+  (per-row; audited `disposition → deleted`, terminal, keeps the record
+  for dedup/audit, refuses while a session/dispatch may be live) —
+  every other operator action goes through the CLI.
 - `manually_verified` tasks were operator-verified, not CI-verified — the
   UI and exports keep that distinction.

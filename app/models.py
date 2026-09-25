@@ -147,3 +147,8 @@ class ScanRequestOut(BaseModel):
     mode: str
     job_id: int | None
     queued: bool  # False when a scan was already pending (idempotent)
+
+
+class TaskDeleteOut(BaseModel):
+    id: int
+    disposition: str  # 'deleted' — record kept for dedup/audit, tracking ends

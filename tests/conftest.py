@@ -69,6 +69,18 @@ def drain(worker, ctx, conn, limit=500):
     return ran
 
 
+def dashboard_app(settings):
+    """Minimal app for HTTP-level tests: router only, no worker."""
+    from fastapi import FastAPI
+
+    from app.routes.dashboard import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.settings = settings
+    return app
+
+
 def task_by_issue(conn, issue_number):
     return conn.execute(
         "SELECT * FROM tasks WHERE issue_number = ?", (issue_number,)
