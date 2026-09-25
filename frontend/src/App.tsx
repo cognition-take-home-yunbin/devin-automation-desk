@@ -24,6 +24,19 @@ const SCENARIOS = [
   "native-observe-failure",
 ];
 
+// Mirrors _UNDELETABLE_EXECUTIONS on the API — a session/dispatch may
+// still be live, so the button is disabled rather than guessing.
+const UNDELETABLE = new Set([
+  "queued",
+  "dispatching",
+  "creation_unknown",
+  "working",
+  "needs_input",
+  "approval_required",
+  "suspended",
+  "stop_requested",
+]);
+
 export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -35,6 +48,7 @@ export default function App() {
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
   const [scanState, setScanState] = useState<"idle" | "sending" | "queued" | "pending">("idle");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -73,6 +87,20 @@ export default function App() {
   const openTask = async (id: number) => setSelected(await api.task(id));
   const runScenario = async (name: string) => {
     await api.startScenario(name);
+    await refresh();
+  };
+  const deleteTask = async (id: number, label: string) => {
+    if (!window.confirm(`Delete task ${label}? It leaves tracking permanently; the record stays for audit.`))
+      return;
+    setDeletingId(id);
+    try {
+      await api.deleteTask(id);
+      if (selected?.id === id) setSelected(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingId(null);
+    }
     await refresh();
   };
   const scanNow = async () => {
@@ -281,7 +309,19 @@ export default function App() {
                       {t.devin_session_url && (
                         <a href={t.devin_session_url}>session</a>
                       )}
-                      {t.slack_link && <a href={t.slack_link}>slack</a>}
+                      {t.slack_link && <a href={t.slack_link}>slack</a>}{" "}
+                      <button
+                        className="delete-task"
+                        disabled={deletingId === t.id || UNDELETABLE.has(t.execution)}
+                        title={
+                          UNDELETABLE.has(t.execution)
+                            ? "Stop the task (cli stop) before deleting — a session may still be live"
+                            : "Remove this task from tracking permanently (record kept for audit)"
+                        }
+                        onClick={() => deleteTask(t.id, `#${t.issue_number}`)}
+                      >
+                        {deletingId === t.id ? "deleting…" : "delete"}
+                      </button>
                     </td>
                   </tr>
                 ))}

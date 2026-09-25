@@ -20,11 +20,12 @@ from ..models import (
     ReportOut,
     ScanRequestOut,
     SimulationResult,
+    TaskDeleteOut,
     TaskDetail,
     TaskSummary,
 )
 from ..services import jobs, simulator
-from ..transitions import audit
+from ..transitions import audit, transition_task
 from ..transitions import is_paused  # noqa: F401  (re-exported for CLI parity)
 
 router = APIRouter()
@@ -110,7 +111,9 @@ def overview(request: Request, conn: sqlite3.Connection = Conn) -> OverviewOut:
     s = request.app.state.settings
     control = conn.execute("SELECT * FROM control WHERE id = 1").fetchone()
     rows = conn.execute(
-        "SELECT * FROM tasks WHERE mode = ? ORDER BY id", (s.app_mode,)
+        "SELECT * FROM tasks WHERE mode = ? AND disposition != 'deleted' "
+        "ORDER BY id",
+        (s.app_mode,),
     ).fetchall()
 
     def count(pred) -> int:
@@ -200,7 +203,9 @@ def list_tasks(
 ) -> list[TaskSummary]:
     s = request.app.state.settings
     rows = conn.execute(
-        "SELECT * FROM tasks WHERE mode = ? ORDER BY id DESC", (s.app_mode,)
+        "SELECT * FROM tasks WHERE mode = ? AND disposition != 'deleted' "
+        "ORDER BY id DESC",
+        (s.app_mode,),
     ).fetchall()
     if state:
         rows = [
@@ -210,6 +215,46 @@ def list_tasks(
             in (r["execution"], r["validation"], r["review"], r["disposition"])
         ]
     return [_task_summary(r, conn) for r in rows]
+
+
+# Executions where a Devin session or a queued dispatch may still be live —
+# deleting one of those would orphan running work, so the endpoint refuses
+# and asks the operator to stop the task first.
+_UNDELETABLE_EXECUTIONS = (
+    "queued", "dispatching", "creation_unknown", "working", "needs_input",
+    "approval_required", "suspended", "stop_requested",
+)
+
+
+@router.delete("/api/tasks/{task_id}", response_model=TaskDeleteOut)
+def delete_task(
+    request: Request, task_id: int, conn: sqlite3.Connection = Conn
+) -> TaskDeleteOut:
+    """Human override: remove a task from tracking (disposition=deleted).
+
+    The record stays — the durable (mode, repo, issue_number) constraint
+    still dedupes re-scans, and audit history is preserved. Terminal;
+    refuses while a session/dispatch may still be live.
+    """
+    s = request.app.state.settings
+    row = conn.execute(
+        "SELECT * FROM tasks WHERE id = ? AND mode = ?",
+        (task_id, s.app_mode),
+    ).fetchone()
+    if row is None or row["disposition"] == "deleted":
+        raise HTTPException(404, "task not found")
+    if row["execution"] in _UNDELETABLE_EXECUTIONS:
+        raise HTTPException(
+            409,
+            f"task execution is '{row['execution']}' — stop the task "
+            "(cli stop) before deleting it",
+        )
+    with db.transaction(conn):
+        transition_task(
+            conn, row, "disposition", "deleted",
+            action="task_deleted", detail="deleted via dashboard",
+        )
+    return TaskDeleteOut(id=task_id, disposition="deleted")
 
 
 @router.get("/api/tasks/{task_id}", response_model=TaskDetail)

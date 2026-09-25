@@ -3,6 +3,7 @@ import type {
   Overview,
   Report,
   ScanRequestResult,
+  TaskDeleteResult,
   TaskDetail,
   TaskSummary,
 } from "./types";
@@ -32,5 +33,10 @@ export const api = {
     fetch("/api/scan", { method: "POST" }).then(async (res) => {
       if (!res.ok) throw new Error(await res.text());
       return (await res.json()) as ScanRequestResult;
+    }),
+  deleteTask: (id: number) =>
+    fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(async (res) => {
+      if (!res.ok) throw new Error(await res.text());
+      return (await res.json()) as TaskDeleteResult;
     }),
 };

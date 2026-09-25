@@ -1,23 +1,14 @@
 """Dashboard scan-now human override (POST /api/scan)."""
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from conftest import drain, task_by_issue
+from conftest import dashboard_app, drain, task_by_issue
 
-from app.routes.dashboard import router
 from app.services.simulator import _seed_issue
 
 
-def _app(settings):
-    app = FastAPI()
-    app.include_router(router)
-    app.state.settings = settings
-    return app
-
-
 def test_scan_now_enqueues_durable_scan(settings, conn):
-    res = TestClient(_app(settings)).post("/api/scan")
+    res = TestClient(dashboard_app(settings)).post("/api/scan")
     assert res.status_code == 200
     body = res.json()
     assert body["mode"] == "simulation"
@@ -33,7 +24,7 @@ def test_scan_now_enqueues_durable_scan(settings, conn):
 
 
 def test_scan_now_is_idempotent_while_pending(settings, conn):
-    client = TestClient(_app(settings))
+    client = TestClient(dashboard_app(settings))
     first = client.post("/api/scan").json()
     second = client.post("/api/scan").json()
     assert second["queued"] is False
@@ -53,7 +44,7 @@ def test_scan_now_drives_discovery(settings, conn, ctx, worker):
         approved_by=s.github_allowed_approvers[0],
         approval_label=s.approval_issue_label,
     )
-    res = TestClient(_app(settings)).post("/api/scan")
+    res = TestClient(dashboard_app(settings)).post("/api/scan")
     assert res.status_code == 200
     drain(worker, ctx, conn)
     task = task_by_issue(conn, 501)
