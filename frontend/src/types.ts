@@ -123,3 +123,9 @@ export interface NativeSession {
   first_seen_at: number;
   last_seen_at: number;
 }
+
+export interface ScanRequestResult {
+  mode: Mode;
+  job_id: number | null;
+  queued: boolean;
+}
