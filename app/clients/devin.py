@@ -268,6 +268,10 @@ class LiveDevinClient:
         if session.pr_number is None and out.get("pr_number"):
             session.pr_number = int(out["pr_number"])
             session.pr_url = out.get("pr_url")
+        if session.pr_number and session.pr_head_sha is None:
+            session.pr_head_sha = (
+                out.get("head_sha") or out.get("pr_head_sha") or None
+            )
         return session
 
 

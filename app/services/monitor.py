@@ -19,14 +19,41 @@ from .operator import _record_cleanup
 _STATUS_TO_EXECUTION = {
     "working": "working",
     "running": "working",
+    "new": "working",
+    "claimed": "working",
+    "resuming": "working",
+    "resume_requested": "working",
     "needs_input": "needs_input",
     "approval_required": "approval_required",
     "suspended": "suspended",
+    "sleep": "suspended",
     "finished": "agent_finished",
     "succeeded": "agent_finished",
+    "exit": "agent_finished",
     "failed": "failed",
+    "error": "failed",
+    "expired": "failed",
     "stopped": "stopped",
 }
+
+
+def _map_session(session) -> str | None:
+    """status/status_detail pair -> task execution, honestly resolved.
+
+    A session that finished its work and went to sleep arrives as
+    ``suspended`` — sometimes with detail ``finished``, sometimes
+    ``inactivity``/``sleep``. ``suspended`` alone keeps the task waiting
+    (it can be resumed); but once the session has produced its
+    deliverable the repair is effectively complete — verification can
+    begin while it sleeps, and the session is retained for the native
+    conversation regardless. Sleep *without* a deliverable stays
+    suspended rather than being treated as success.
+    """
+    if session.status == "suspended":
+        if session.status_detail == "finished" or session.pr_number:
+            return "agent_finished"
+        return "suspended"
+    return _STATUS_TO_EXECUTION.get(session.status)
 
 
 def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
@@ -51,7 +78,7 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
              session.acu_used, attempt_id),
         )
 
-    mapped = _STATUS_TO_EXECUTION.get(session.status)
+    mapped = _map_session(session)
     if mapped is None:
         # Preserve unfamiliar values — uncertainty is not failure or success.
         add_evidence(
@@ -144,8 +171,14 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
                  db.now(), task["id"]),
             )
         task = get_task(conn, task["id"])
+        finish_detail = (
+            "suspended session produced a PR"
+            if session.status == "suspended" and session.pr_number
+            and session.status_detail != "finished"
+            else "session reported finished"
+        )
         transition_task(conn, task, "execution", "agent_finished",
-                        detail="session reported finished")
+                        detail=finish_detail)
         # Handoff policy: keep the session available — the planned native
         # Slack conversation and the verification update still need it.
         conn.execute(
