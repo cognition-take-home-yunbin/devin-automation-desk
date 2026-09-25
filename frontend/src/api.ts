@@ -2,6 +2,7 @@ import type {
   NativeSession,
   Overview,
   Report,
+  ScanRequestResult,
   TaskDetail,
   TaskSummary,
 } from "./types";
@@ -26,5 +27,10 @@ export const api = {
     }).then(async (res) => {
       if (!res.ok) throw new Error(await res.text());
       return res.json();
+    }),
+  scanNow: () =>
+    fetch("/api/scan", { method: "POST" }).then(async (res) => {
+      if (!res.ok) throw new Error(await res.text());
+      return (await res.json()) as ScanRequestResult;
     }),
 };

@@ -141,3 +141,9 @@ class SimulationResult(BaseModel):
     issue_number: int
     notes: list[str]
     synthetic: bool
+
+
+class ScanRequestOut(BaseModel):
+    mode: str
+    job_id: int | None
+    queued: bool  # False when a scan was already pending (idempotent)

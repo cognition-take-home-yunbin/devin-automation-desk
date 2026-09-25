@@ -1,5 +1,6 @@
-"""Dashboard API — read-only views over durable state plus the
-simulation-only scenario trigger (PRD §11 internal API)."""
+"""Dashboard API — read-only views over durable state, the scan-now
+human override, and the simulation-only scenario trigger (PRD §11
+internal API)."""
 
 from __future__ import annotations
 
@@ -17,11 +18,13 @@ from ..models import (
     NativeSessionOut,
     OverviewOut,
     ReportOut,
+    ScanRequestOut,
     SimulationResult,
     TaskDetail,
     TaskSummary,
 )
-from ..services import simulator
+from ..services import jobs, simulator
+from ..transitions import audit
 from ..transitions import is_paused  # noqa: F401  (re-exported for CLI parity)
 
 router = APIRouter()
@@ -370,6 +373,34 @@ def list_jobs(request: Request, conn: sqlite3.Connection = Conn) -> list[dict]:
         "claimed_by, created_at FROM jobs ORDER BY id DESC LIMIT 100"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+@router.post("/api/scan", response_model=ScanRequestOut)
+def request_scan(request: Request, conn: sqlite3.Connection = Conn) -> ScanRequestOut:
+    """Human override: enqueue a scan_issues job ahead of the schedule.
+
+    Available in both modes — the scan itself only performs external
+    reads; dispatch stays gated by pause, budgets and approval checks.
+    Idempotent while a scan is already pending.
+    """
+    s = request.app.state.settings
+    with db.transaction(conn):
+        pending = conn.execute(
+            "SELECT id FROM jobs WHERE kind = 'scan_issues' "
+            "AND status IN ('queued', 'running') ORDER BY id LIMIT 1"
+        ).fetchone()
+        if pending is not None:
+            return ScanRequestOut(
+                mode=s.app_mode, job_id=int(pending["id"]), queued=False
+            )
+        job_id = jobs.enqueue(
+            conn, "scan_issues", {"scheduled": False}, mode=s.app_mode
+        )
+        audit(
+            conn, action="scan_requested", mode=s.app_mode,
+            source="operator", detail="scan now via dashboard",
+        )
+    return ScanRequestOut(mode=s.app_mode, job_id=job_id, queued=True)
 
 
 @router.post("/api/simulation/scenarios", response_model=SimulationResult)

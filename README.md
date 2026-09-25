@@ -185,7 +185,7 @@ app/
   states.py          4 state dimensions + transition map
   transitions.py     audited state transitions + evidence writes
   cli.py             operator CLI (never starts a worker)
-  routes/dashboard.py  read API + simulation-only scenario trigger
+  routes/dashboard.py  read API + scan-now trigger + simulation-only scenarios
   clients/{base,fakes,github,devin,factory}.py
   services/{scanner,dispatch,monitor,verification,reporting,
             report_source,jobs,worker,simulator,context,policy,
@@ -224,6 +224,9 @@ docs/recovery.md             restart/failure recovery runbook
 - Actual delivery of the verification update into the session's native
   conversation is confirmed by inspecting the session — the desk records
   the API send, never assumes the post landed.
-- The dashboard is read-only; operator actions go through the CLI.
+- The dashboard is read-only except **Scan now** (a human override that
+  enqueues the same durable `scan_issues` job as `cli scan now`; dispatch
+  stays gated by pause/budgets/approval) — every other operator action
+  goes through the CLI.
 - `manually_verified` tasks were operator-verified, not CI-verified — the
   UI and exports keep that distinction.

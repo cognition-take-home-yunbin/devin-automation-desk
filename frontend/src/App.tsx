@@ -34,6 +34,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(true);
+  const [scanState, setScanState] = useState<"idle" | "sending" | "queued" | "pending">("idle");
 
   const refresh = useCallback(async () => {
     try {
@@ -72,6 +73,19 @@ export default function App() {
   const openTask = async (id: number) => setSelected(await api.task(id));
   const runScenario = async (name: string) => {
     await api.startScenario(name);
+    await refresh();
+  };
+  const scanNow = async () => {
+    if (scanState === "sending") return;
+    setScanState("sending");
+    try {
+      const res = await api.scanNow();
+      setScanState(res.queued ? "queued" : "pending");
+      setTimeout(() => setScanState("idle"), 4000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setScanState("idle");
+    }
     await refresh();
   };
 
@@ -118,6 +132,20 @@ export default function App() {
           {overview?.repo ?? "…"}
         </span>
         <span className="spacer" />
+        <button
+          className="scan-now"
+          onClick={scanNow}
+          disabled={scanState === "sending"}
+          title="Enqueue a scan for approved issues right now (human override). Dispatch still respects pause, budgets, and approval checks."
+        >
+          {scanState === "sending"
+            ? "queueing…"
+            : scanState === "queued"
+              ? "scan queued"
+              : scanState === "pending"
+                ? "scan already pending"
+                : "Scan now"}
+        </button>
         <span
           className={`refresh ${stale ? "stale" : ""}`}
           role={stale ? "alert" : undefined}
