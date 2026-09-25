@@ -306,7 +306,11 @@ class FakeDevinClient:
             acu_used=script.get("acu_used", 0.0) + r["acu_used"],
             notes=script.get("notes", {}),
         )
-        if status == "finished":
+        if status == "finished" or (
+            # A suspended script carrying a PR models a session that went
+            # to sleep after producing its deliverable.
+            status == "suspended" and script.get("pr_number")
+        ):
             session.pr_number = script.get("pr_number")
             session.pr_url = script.get("pr_url")
             session.pr_head_sha = script.get("pr_head_sha")

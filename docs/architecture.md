@@ -29,7 +29,13 @@ restart loses nothing.
     Devin call, reconciles ambiguous creation by tag, honors `Retry-After`.
   - `monitor` — polls `status`/`status_detail` into the execution dimension,
     settles reservations at terminal, records the PR for verification,
-    writes the cleanup ledger (`kept`/`terminated`).
+    writes the cleanup ledger (`kept`/`terminated`). A session that went
+    to sleep after finishing arrives as `suspended`: it counts as
+    `agent_finished` only when `status_detail` is `finished` or the
+    session already carries a PR — sleep without a deliverable stays
+    suspended. `exit` is normal completion; startup vocabulary
+    (`new`/`claimed`/`resuming`) keeps polling; anything unrecognized is
+    preserved as unknown, never faked.
   - `verification` — independent check-run verification under the versioned
     YAML policy.
   - `reporting` + `report_source` — deterministic snapshots → fixed
