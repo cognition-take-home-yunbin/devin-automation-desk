@@ -295,8 +295,10 @@ def handle_dispatch(ctx: ServiceContext, job: sqlite3.Row) -> None:
         conn.execute(
             """UPDATE attempts SET session_id = ?, session_url = ?,
                raw_status = ?, last_seen_at = ?, acu_used = ? WHERE id = ?""",
+            # acus_consumed is 0.0 on a fresh session record — store NULL
+            # (unknown) rather than a literal 0 that would render as "$0".
             (session.session_id, session.url, session.status,
-             db.now(), session.acu_used, attempt_id),
+             db.now(), session.acu_used or None, attempt_id),
         )
         task = get_task(conn, task["id"])
         transition_task(conn, task, "execution", "working",

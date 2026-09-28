@@ -47,6 +47,7 @@ HANDLERS = {
     "dispatch_task": dispatch.handle_dispatch,
     "reconcile_creation": dispatch.handle_reconcile,
     "poll_session": monitor.handle_poll,
+    "refresh_acu": monitor.handle_refresh_acu,
     "verify_task": verification.handle_verify,
     "publish_report": report_source.handle_publish,
     "send_message": operator.handle_send_message,

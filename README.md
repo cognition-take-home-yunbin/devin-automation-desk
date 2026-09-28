@@ -117,6 +117,11 @@ ambiguous writes) the live clients surface.
   excluded from the frozen snapshot hash and never touch the human
   candidate/approval labels (live writes need `GITHUB_TOKEN` issues scope).
   Deleting a task strips the status label.
+- **ACU usage**: session records report `acus_consumed` as 0.0 even for
+  finished sessions — per-repair spend is read from the consumption endpoint
+  (`/consumption/daily/sessions/{id}`) on every poll, reconciled once more
+  ~15 min after terminal state (`refresh_acu` job), and stored NULL →
+  "unknown" when the token lacks consumption permission. Never a false $0.
 - **Budgets**: dispatch *reserves* `REPAIR_ACU_LIMIT` first
   (`budget_reservations` `held` → `consumed` at terminal with observed ACU,
   or `released` when nothing was spent). `DAILY_ADMISSION_ACU_LIMIT` and
@@ -220,9 +225,10 @@ docs/recovery.md             restart/failure recovery runbook
 - The native-Slack-on-API-session feasibility test
   (`docs/native-slack-sync.md`) is documented but not yet executed against
   a live org; `slack-link` is the manual bridge until it is confirmed.
-- `daily_acu_usage` (enterprise consumption API) degrades to `None` when
-  the service user lacks the scope — budget accounting then relies on the
-  local reservation ledger only.
+- `daily_acu_usage` / `session_acu_usage` (consumption APIs) degrade to
+  `None` when the service user lacks the scope — budget accounting then
+  relies on the local reservation ledger and per-repair spend shows
+  "unknown", never a false 0.
 - The daily report's schedule, Slack delivery and generation live in the
   external Devin Automation by design — the app intentionally does not
   implement them (`docs/native-reporting.md`). Simulation fakes the

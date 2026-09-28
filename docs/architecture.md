@@ -61,7 +61,9 @@ restart loses nothing.
   desk-managed status labels on `GITHUB_TOKEN` and `LiveReportSink`'s
   report body on `REPORT_GITHUB_TOKEN`); `devin.py` is the v3 client
   (`/v3/organizations/{org}/sessions` create/list-by-tag/get/message/
-  DELETE?archive=true, enterprise consumption with a `None` degradation);
+  DELETE?archive=true; per-session + org consumption endpoints degrade to
+  `None` without the permission — session records report
+  `acus_consumed=0.0`, so usage is read from the consumption API);
   `factory.py` selects by `APP_MODE` — anything else raises.
 - **`app/cli.py`** — `doctor`, `simulate`, `scan now`, `tasks`, `reports`,
   `pause`/`unpause`, `message`, `stop`, `retry --reason`, `reconcile`,
@@ -160,8 +162,11 @@ raise.
   reads that time out or return 429 honor `Retry-After` and requeue with
   bounded backoff. Pagination is bounded (`MAX_PAGES=10`).
 - **Reservation accounting**: `held` at dispatch → `consumed` with observed
-  `acus_consumed` at terminal, or `released` on throttle/no-create. Caps
-  check `held + consumed` — never just dispensed session IDs.
+  usage at terminal, or `released` on throttle/no-create. Usage comes from
+  the per-session consumption endpoint (`acus_consumed` on the session
+  record stays 0.0), reconciled once more ~15 min post-terminal by the
+  `refresh_acu` job. Caps check `held + consumed` — never just dispensed
+  session IDs.
 - Polling preserves unfamiliar statuses instead of forcing failure/success.
 - **Independent verification (F09)**: the verifier confirms the PR targets
   the configured repo + base branch (out-of-scope targets → flag +
