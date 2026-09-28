@@ -146,6 +146,11 @@ class DevinClient(Protocol):
     def daily_acu_usage(self, time_after: float, time_before: float) -> float | None: ...
     # daily_acu_usage returns None when the deployment lacks a consumption API —
     # callers must fall back to local reservation accounting.
+    def session_acu_usage(self, session_id: str) -> float | None: ...
+    # session_acu_usage reads the consumption endpoint for one session. The
+    # session record's own acus_consumed field stays 0 in practice, so this
+    # is the authoritative source; None when the endpoint is unavailable or
+    # the token lacks the consumption permission.
 
 
 class ReportSink(Protocol):

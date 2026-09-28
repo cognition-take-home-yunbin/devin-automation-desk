@@ -318,7 +318,7 @@ python -m app.cli export-evidence [--output DIR]
 | Intake freeze + re-verify | Drift or withdrawn approval before create → blocked, no session |
 | Untrusted issue text | Prompt marks snapshot as UNTRUSTED EVIDENCE; playbook/knowledge pin behavior |
 | Serial concurrency | `MAX_ACTIVE_SESSIONS` (default 1) |
-| ACU reservation | Reserve `REPAIR_ACU_LIMIT` **before** create; held → consumed/released |
+| ACU reservation | Reserve `REPAIR_ACU_LIMIT` **before** create; held → consumed/released; per-session spend read from the consumption API (`acus_consumed` on the session record stays 0.0), reconciled ~15 min post-terminal |
 | Daily / project admission | Caps over held+consumed; message/retry capacity-checked |
 | Ambiguous writes | `AmbiguousCreation` → reconcile; never auto-retry paid creates |
 | Independent verification | Wrong repo/branch, missing/failed/untrusted/stale checks never yield `verified` |
@@ -395,7 +395,7 @@ Fill with **observed** links after real runs (session URLs may need org access; 
 
 - Review/merge watching is modelled but not automated — `merged_prs` stays 0 until a poller exists.
 - Native Slack sync for API-created sessions must be validated per org ([`docs/native-slack-sync.md`](docs/native-slack-sync.md)); until then `slack-link` is the bridge.
-- Enterprise daily ACU consumption API may be unavailable → local reservation ledger only.
+- ACU consumption APIs (org daily + per-session) may be unavailable without the scope → local reservation ledger for caps, and per-repair spend shows "unknown" — never a false $0.
 - Daily Slack digest schedule/delivery is owned by the external Devin Automation; this app only publishes facts and observes tagged sessions.
 - `list_sessions_by_tag` needs org list permission; failures surface as a badge, never an empty “all clear.”
 - Verification-update delivery into Slack is confirmed by inspecting the session — the desk records the API send only.

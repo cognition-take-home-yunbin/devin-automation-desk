@@ -62,6 +62,16 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
     task = get_task(conn, payload["task_id"])
     session = ctx.clients.devin.get_session(payload["session_id"])
 
+    # The session record's acus_consumed field is not populated in practice
+    # (finished sessions with merged PRs report 0.0), so authoritative
+    # per-session usage comes from the consumption endpoint; fall back to
+    # the session field, then to None (renders "unknown", never a false 0).
+    acu = (
+        ctx.clients.devin.session_acu_usage(session.session_id)
+        or session.acu_used
+        or None
+    )
+
     attempt_id = payload.get("attempt_id")
     if attempt_id is None:
         row = conn.execute(
@@ -75,7 +85,7 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
             "UPDATE attempts SET raw_status = ?, raw_detail = ?, "
             "last_seen_at = ?, acu_used = COALESCE(?, acu_used) WHERE id = ?",
             (session.status, session.status_detail, db.now(),
-             session.acu_used, attempt_id),
+             acu, attempt_id),
         )
 
     mapped = _map_session(session)
@@ -120,7 +130,9 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
         # Remote termination (operator stop via API/webapp). The task outcome
         # is preserved — a delivered task stays delivered; an active one is
         # honestly cancelled.
-        budget.consume(conn, task["id"], session.acu_used)
+        budget.consume(conn, task["id"], acu)
+        _queue_acu_refresh(conn, ctx.mode, task["id"], attempt_id,
+                           session.session_id)
         transition_task(conn, task, "execution", "stopped",
                         detail=session.status_detail or "session terminated")
         task = get_task(conn, task["id"])
@@ -140,7 +152,9 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
         return
 
     if mapped == "failed":
-        budget.consume(conn, task["id"], session.acu_used)
+        budget.consume(conn, task["id"], acu)
+        _queue_acu_refresh(conn, ctx.mode, task["id"], attempt_id,
+                           session.session_id)
         transition_task(conn, task, "execution", "failed",
                         detail=session.status_detail or session.status)
         transition_task(conn, get_task(conn, task["id"]), "disposition",
@@ -162,7 +176,9 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
     # agent_finished — settle the reservation with observed ACU spend,
     # record the PR and hand off to verification.
     with db.transaction(conn):
-        budget.consume(conn, task["id"], session.acu_used)
+        budget.consume(conn, task["id"], acu)
+        _queue_acu_refresh(conn, ctx.mode, task["id"], attempt_id,
+                           session.session_id)
         if session.pr_url:
             conn.execute(
                 """UPDATE tasks SET pr_number = ?, pr_url = ?, head_sha = ?,
@@ -220,3 +236,44 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
                             detail="session finished without a PR")
             transition_task(conn, get_task(conn, task["id"]), "disposition",
                             "blocked", detail="finished without a PR")
+
+
+def _queue_acu_refresh(
+    conn: sqlite3.Connection,
+    mode: str,
+    task_id: int,
+    attempt_id: int | None,
+    session_id: str,
+) -> None:
+    """Consumption settles after the session ends — schedule one delayed
+    refresh so the recorded spend reconciles to the billed value."""
+    jobs.enqueue(
+        conn, "refresh_acu",
+        {"task_id": task_id, "attempt_id": attempt_id,
+         "session_id": session_id},
+        mode=mode, delay=900.0,
+        dedup_key=f"acuref:{mode}:{task_id}:{session_id}",
+    )
+
+
+def handle_refresh_acu(ctx: ServiceContext, job: sqlite3.Row) -> None:
+    """Re-read a finished session's consumption and reconcile the attempt +
+    consumed reservation upward when the billed total exceeds the recorded
+    one. Never writes down."""
+    conn = ctx.conn
+    payload = db.loads(job["payload_json"])
+    usage = ctx.clients.devin.session_acu_usage(payload["session_id"])
+    if usage is None:
+        return
+    with db.transaction(conn):
+        if payload.get("attempt_id") is not None:
+            conn.execute(
+                "UPDATE attempts SET acu_used = ? WHERE id = ? "
+                "AND (acu_used IS NULL OR acu_used < ?)",
+                (usage, payload["attempt_id"], usage),
+            )
+        conn.execute(
+            "UPDATE budget_reservations SET amount = ? WHERE task_id = ? "
+            "AND status = 'consumed' AND amount < ?",
+            (usage, payload["task_id"], usage),
+        )

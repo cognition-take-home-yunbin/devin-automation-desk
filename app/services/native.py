@@ -49,6 +49,13 @@ def handle_observe(ctx: ServiceContext, job: sqlite3.Row) -> None:
     with db.transaction(conn):
         now = db.now()
         for sess in sessions:
+            # Session records report acus_consumed=0.0 in practice; the
+            # consumption endpoint is authoritative, None stays "unknown".
+            acu = (
+                ctx.clients.devin.session_acu_usage(sess.session_id)
+                or sess.acu_used
+                or None
+            )
             existing = conn.execute(
                 "SELECT id FROM native_sessions "
                 "WHERE mode = ? AND session_id = ?",
@@ -63,7 +70,7 @@ def handle_observe(ctx: ServiceContext, job: sqlite3.Row) -> None:
                     (
                         ctx.mode, s.native_report_session_tag,
                         sess.session_id, sess.url, sess.status,
-                        sess.status_detail, sess.acu_used, now, now,
+                        sess.status_detail, acu, now, now,
                     ),
                 )
             else:
@@ -74,7 +81,7 @@ def handle_observe(ctx: ServiceContext, job: sqlite3.Row) -> None:
                        WHERE id = ?""",
                     (
                         sess.url, sess.status, sess.status_detail,
-                        sess.acu_used, now, existing["id"],
+                        acu, now, existing["id"],
                     ),
                 )
         conn.execute(

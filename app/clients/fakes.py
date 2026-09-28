@@ -417,6 +417,36 @@ class FakeDevinClient:
         # local-reservation accounting path instead.
         return None
 
+    def session_acu_usage(self, session_id: str) -> float | None:
+        """Simulated consumption endpoint. Script ``devin.session_acu_usage``
+        error ``unavailable`` to model a deployment without consumption
+        permission (→ None, callers fall back to the session record)."""
+        err = self.conn.execute(
+            "SELECT id, error FROM sim_call_scripts "
+            "WHERE operation = 'devin.session_acu_usage' AND remaining > 0 "
+            "LIMIT 1",
+        ).fetchone()
+        if err is not None:
+            self.conn.execute(
+                "UPDATE sim_call_scripts SET remaining = remaining - 1 "
+                "WHERE id = ?",
+                (err["id"],),
+            )
+            if err["error"] == "unavailable":
+                return None
+            if err["error"] == "rate_limited":
+                raise RateLimited(retry_after=0.05)
+            raise RuntimeError(
+                f"simulated {err['error']} on devin.session_acu_usage"
+            )
+        r = self.conn.execute(
+            "SELECT * FROM sim_sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if r is None:
+            return None
+        script = db.loads(r["script_json"], {})
+        return script.get("acu_used", 0.0) + r["acu_used"]
+
 
 class FakeReportSink:
     """Stands in for the fixed report-source GitHub issue. Writes land in

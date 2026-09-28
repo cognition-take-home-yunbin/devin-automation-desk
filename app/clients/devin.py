@@ -10,6 +10,10 @@ Endpoint map (``api.devin.ai/v3``):
 - ``DELETE /organizations/{org}/sessions/{id}?archive=true`` — operator stop.
 - ``GET  /enterprise/consumption/daily/organizations/{org}`` — org ACU
   consumption (optional capability; absent permission → local accounting).
+- ``GET  /organizations/{org}/consumption/daily/sessions/{id}`` — per-session
+  ACU consumption. ``SessionResponse.acus_consumed`` on the session record
+  is observed to stay ``0.0`` even for completed sessions, so real usage is
+  read from the consumption API; absent permission → None → "unknown".
 
 Creation intent (attempt row + correlation tag) is persisted by the caller
 *before* ``create_session`` is invoked, so an ambiguous outcome can be
@@ -227,6 +231,27 @@ class LiveDevinClient:
                     "time_after": int(time_after),
                     "time_before": int(time_before),
                 },
+            )
+        except httpx.HTTPError:
+            return None
+        if resp.status_code in (401, 403, 404):
+            return None
+        resp.raise_for_status()
+        return float(resp.json().get("total_acus") or 0.0)
+
+    def session_acu_usage(self, session_id: str) -> float | None:
+        """Total ACUs consumed by one session, from the consumption API.
+
+        The session record's ``acus_consumed`` field does not populate (it
+        returns 0.0 even for sessions that produced merged PRs), so this
+        endpoint is the authoritative per-session usage source. Returns
+        None when the service user lacks the consumption permission or the
+        session isn't metered — callers preserve *unknown* in that case.
+        """
+        try:
+            resp = self._client.get(
+                f"{self._org_base}/organizations/{self.org_id}"
+                f"/consumption/daily/sessions/{session_id}",
             )
         except httpx.HTTPError:
             return None
