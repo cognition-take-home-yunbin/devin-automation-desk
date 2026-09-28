@@ -126,6 +126,10 @@ class GitHubClient(Protocol):
     def update_issue_body(
         self, repo: str, number: int, body: str
     ) -> str: ...  # returns observed body hash
+    def add_label(self, repo: str, number: int, label: str) -> None: ...
+    def remove_label(self, repo: str, number: int, label: str) -> None: ...
+    # Label writes power the managed status labels (see status_labels.py);
+    # remove_label is idempotent — an absent label is a successful remove.
 
 
 class BudgetBlocked(Exception):

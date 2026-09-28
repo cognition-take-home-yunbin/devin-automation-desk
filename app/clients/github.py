@@ -1,10 +1,12 @@
 """Live GitHub REST client (milestone B).
 
-Read-only against the configured fork: ``update_issue_body`` stays disabled —
-the only live issue write is the report-source update, which lives in
-``LiveReportSink`` behind ``REPORT_GITHUB_TOKEN``. Throttling surfaces as
-:class:`RateLimited` honoring ``Retry-After`` / ``X-RateLimit-Reset`` so the
-job layer's bounded retries do the waiting.
+Against the configured fork the client is read-only except for the managed
+status labels: ``add_label`` / ``remove_label`` write via ``GITHUB_TOKEN``,
+which therefore needs the issues write scope in live mode. Issue bodies stay
+disabled — the report-source update lives in ``LiveReportSink`` behind
+``REPORT_GITHUB_TOKEN``. Throttling surfaces as :class:`RateLimited`
+honoring ``Retry-After`` / ``X-RateLimit-Reset`` so the job layer's bounded
+retries do the waiting.
 """
 
 from __future__ import annotations
@@ -123,7 +125,14 @@ class LiveGitHubClient:
         )
 
     def get_issue_labels(self, repo: str, number: int) -> list[str]:
-        rows = self._paged_list(f"/repos/{repo}/issues/{number}/labels", {})
+        try:
+            rows = self._paged_list(
+                f"/repos/{repo}/issues/{number}/labels", {}
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise IssueNotFound(f"{repo}#{number}") from exc
+            raise
         return [row["name"] for row in rows]
 
     def list_label_events(self, repo: str, number: int) -> list[LabelEvent]:
@@ -189,8 +198,32 @@ class LiveGitHubClient:
 
     def update_issue_body(self, repo: str, number: int, body: str) -> str:
         raise ExternalWriteDisabled(
-            "app GitHub token is read-only; report writes use REPORT_GITHUB_TOKEN"
+            "issue body writes stay disabled; report bodies use "
+            "REPORT_GITHUB_TOKEN"
         )
+
+    def add_label(self, repo: str, number: int, label: str) -> None:
+        try:
+            self._request(
+                "POST", f"/repos/{repo}/issues/{number}/labels",
+                json_body={"labels": [label]},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise IssueNotFound(f"{repo}#{number}") from exc
+            raise
+
+    def remove_label(self, repo: str, number: int, label: str) -> None:
+        try:
+            self._request(
+                "DELETE",
+                f"/repos/{repo}/issues/{number}/labels/{label}",
+            )
+        except httpx.HTTPStatusError as exc:
+            # Removing an absent label is a successful remove — keep the
+            # sync job idempotent.
+            if exc.response.status_code != 404:
+                raise
 
 
 class LiveReportSink:

@@ -22,6 +22,7 @@ class TaskSummary(BaseModel):
     devin_session_url: str | None
     slack_link: str | None
     cleanup_state: str
+    status_label: str | None
     head_sha: str | None
     base_sha: str | None
     acu_used: float | None

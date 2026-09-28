@@ -16,6 +16,7 @@ export interface TaskSummary {
   devin_session_url: string | null;
   slack_link: string | null;
   cleanup_state: string;
+  status_label: string | null;
   head_sha: string | null;
   base_sha: string | null;
   acu_used: number | null;

@@ -46,14 +46,20 @@ restart loses nothing.
     `reconcile_task` job handlers (capacity-checked, never auto-resume).
   - `worker` — claim/lease/recover; `_maybe_schedule_scan` keeps the
     `SCAN_INTERVAL_SECONDS` schedule from piling up.
+  - `label_sync` — `sync_status_label` job: diffs the task's managed
+    status label (`status_labels.desired_label`) against the issue's live
+    labels and adds/removes only desk-managed labels. Enqueued inside
+    `transition_task` whenever the desired label differs from the applied
+    `tasks.status_label`, reconciled again on worker `recover`.
   - `jobs` — durable queue (dedup key + lease + bounded backoff).
   - `simulator` — scenario seeds (10 scenarios, synthetic-only).
 - **`app/clients/`** — `base.py` protocols + errors (`RateLimited`,
   `AmbiguousCreation`, `IssueNotFound`, `ExternalWriteDisabled`,
   `BudgetBlocked`); `fakes.py` drives everything from `sim_*` tables;
-  `github.py` is the read-only REST client (bounded pagination,
-  `Retry-After`/`X-RateLimit-Reset` aware; `LiveReportSink` is the sole
-  write, on `REPORT_GITHUB_TOKEN`); `devin.py` is the v3 client
+  `github.py` is the REST client (bounded pagination,
+  `Retry-After`/`X-RateLimit-Reset` aware; the only writes are the
+  desk-managed status labels on `GITHUB_TOKEN` and `LiveReportSink`'s
+  report body on `REPORT_GITHUB_TOKEN`); `devin.py` is the v3 client
   (`/v3/organizations/{org}/sessions` create/list-by-tag/get/message/
   DELETE?archive=true, enterprise consumption with a `None` degradation);
   `factory.py` selects by `APP_MODE` — anything else raises.

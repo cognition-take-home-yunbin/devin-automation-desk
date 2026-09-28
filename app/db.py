@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     head_sha TEXT,
     last_error TEXT,
     cleanup_state TEXT NOT NULL DEFAULT 'pending',
+    -- last managed status label successfully applied on the issue
+    -- (NULL = none applied / cleared); desired state lives in the dims
+    status_label TEXT,
     synthetic INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
@@ -373,6 +376,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
          "ALTER TABLE control ADD COLUMN last_native_observe_at REAL"),
         ("control", "native_observe_error",
          "ALTER TABLE control ADD COLUMN native_observe_error TEXT"),
+        ("tasks", "status_label",
+         "ALTER TABLE tasks ADD COLUMN status_label TEXT"),
     ):
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column not in cols:
