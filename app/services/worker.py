@@ -22,15 +22,16 @@ import logging
 import sqlite3
 import uuid
 
-from .. import db
+from .. import db, status_labels
 from ..clients.factory import build_clients
 from ..config import Settings
 from ..clients.base import RateLimited
-from ..transitions import audit, is_paused
+from ..transitions import audit, is_paused, request_label_sync
 from .context import ServiceContext
 from . import (
     dispatch,
     jobs,
+    label_sync,
     monitor,
     native,
     operator,
@@ -54,6 +55,7 @@ HANDLERS = {
     "reconcile_task": operator.handle_reconcile_task,
     "observe_native": native.handle_observe,
     "verification_update": operator.handle_verification_update,
+    status_labels.SYNC_JOB_KIND: label_sync.handle_sync,
 }
 
 JOB_KINDS = tuple(HANDLERS)
@@ -116,6 +118,13 @@ class Worker:
                     detail=f"reattached {len(rows)} session(s), "
                            f"{len(unknowns)} pending creation(s)",
                 )
+            # Reconcile managed status labels — a crash between a remote
+            # label write and the status_label column update would
+            # otherwise leave the issue's label permanently stale.
+            for r in conn.execute(
+                "SELECT * FROM tasks WHERE mode = ?", (ctx.mode,)
+            ).fetchall():
+                request_label_sync(conn, r)
 
     def _maybe_schedule_scan(self, ctx: ServiceContext) -> None:
         conn = ctx.conn

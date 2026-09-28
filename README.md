@@ -108,6 +108,15 @@ ambiguous writes) the live clients surface.
   call; ambiguous creation → `creation_unknown` → reconcile by tag, never
   blind retry. Live reads honor `Retry-After`/`X-RateLimit-Reset`; writes
   that may have landed are `AmbiguousCreation` — preserved, not retried.
+- **Status labels**: the issue's `devin-*` status label mirrors task state —
+  `devin-in-progress` (tracked/working/blocked), `devin-pr-opened` (PR up,
+  checks pending), `devin-succeeded` (verified/delivered/merged),
+  `devin-failed` (session failed/stopped, checks failed, cancelled). Applied
+  by a durable `sync_status_label` job off `transition_task`, reconciled on
+  worker restart, audited as `status_label_synced`; desk-managed labels are
+  excluded from the frozen snapshot hash and never touch the human
+  candidate/approval labels (live writes need `GITHUB_TOKEN` issues scope).
+  Deleting a task strips the status label.
 - **Budgets**: dispatch *reserves* `REPAIR_ACU_LIMIT` first
   (`budget_reservations` `held` → `consumed` at terminal with observed ACU,
   or `released` when nothing was spent). `DAILY_ADMISSION_ACU_LIMIT` and
@@ -181,15 +190,16 @@ ambiguous writes) the live clients surface.
 app/
   main.py            ASGI app + lifespan (starts the one worker)
   config.py          §10.4 contract, fail-closed loading, doctor
-  db.py              SQLite schema v3 + WAL + transaction helpers
+  db.py              SQLite schema v4 + WAL + transaction helpers
   states.py          4 state dimensions + transition map
   transitions.py     audited state transitions + evidence writes
+  status_labels.py   managed devin-* status labels (state → label map)
   cli.py             operator CLI (never starts a worker)
   routes/dashboard.py  read API + scan-now trigger + simulation-only scenarios
   clients/{base,fakes,github,devin,factory}.py
   services/{scanner,dispatch,monitor,verification,reporting,
             report_source,jobs,worker,simulator,context,policy,
-            operator,budget,native}.py
+            operator,budget,native,label_sync}.py
 frontend/            React + TS + Vite dashboard (built into the image)
 config/verification.yaml   versioned verification policy
 tests/               pytest: states, jobs, config, all 11 scenarios,

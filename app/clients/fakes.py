@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import uuid
 
 from .. import db
 from .base import (
@@ -181,6 +182,58 @@ class FakeGitHubClient:
         raise ExternalWriteDisabled(
             "fake GitHub client does not write issue bodies; the report "
             "source goes through the simulated report sink"
+        )
+
+    def add_label(self, repo: str, number: int, label: str) -> None:
+        _raise_if_scripted(self.conn, "github.add_label")
+        r = self.conn.execute(
+            "SELECT id, labels_json FROM sim_issues WHERE repo = ? "
+            "AND number = ? AND state = 'open'",
+            (repo, number),
+        ).fetchone()
+        if r is None:
+            raise IssueNotFound(f"simulated issue {repo}#{number} gone")
+        labels = db.loads(r["labels_json"], [])
+        if label in labels:
+            return
+        labels.append(label)
+        self.conn.execute(
+            "UPDATE sim_issues SET labels_json = ? WHERE id = ?",
+            (db.dumps(labels), r["id"]),
+        )
+        self._record_label_event(repo, number, "labeled", label)
+
+    def remove_label(self, repo: str, number: int, label: str) -> None:
+        _raise_if_scripted(self.conn, "github.remove_label")
+        r = self.conn.execute(
+            "SELECT id, labels_json FROM sim_issues WHERE repo = ? "
+            "AND number = ?",
+            (repo, number),
+        ).fetchone()
+        if r is None:
+            raise IssueNotFound(f"simulated issue {repo}#{number} gone")
+        labels = db.loads(r["labels_json"], [])
+        if label not in labels:
+            return  # idempotent — GitHub DELETE on an absent label is a no-op
+        labels.remove(label)
+        self.conn.execute(
+            "UPDATE sim_issues SET labels_json = ? WHERE id = ?",
+            (db.dumps(labels), r["id"]),
+        )
+        self._record_label_event(repo, number, "unlabeled", label)
+
+    def _record_label_event(
+        self, repo: str, number: int, event: str, label: str
+    ) -> None:
+        # Label events mirror what the real API emits; the actor marks them
+        # as desk-written so approval filters (approval label only) never
+        # mistake them for a human authorization signal.
+        self.conn.execute(
+            """INSERT INTO sim_issue_events
+               (repo, issue_number, event_id, event, label, actor, created_at)
+               VALUES (?, ?, ?, ?, ?, 'repairdesk[bot]', ?)""",
+            (repo, number, f"sim-evt-label-{uuid.uuid4().hex[:12]}",
+             event, label, db.now()),
         )
 
 

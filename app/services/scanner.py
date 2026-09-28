@@ -12,19 +12,29 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 
-from .. import db
+from .. import db, status_labels
 from ..clients.base import Issue
-from ..transitions import add_evidence, audit, get_task, transition_task
+from ..transitions import (
+    add_evidence,
+    audit,
+    get_task,
+    request_label_sync,
+    transition_task,
+)
 from .context import ServiceContext
 from . import jobs
 
 
 def issue_snapshot_hash(issue: Issue) -> str:
+    # Managed status labels are desk-written, not human content — exclude
+    # them so our own sync never trips the dispatch re-verify's
+    # "snapshot changed" gate.
+    labels = [l for l in issue.labels if l not in status_labels.MANAGED_LABELS]
     canonical = db.dumps(
         {
             "title": issue.title,
             "body": issue.body,
-            "labels": sorted(issue.labels),
+            "labels": sorted(labels),
             "state": issue.state,
         }
     )
@@ -162,6 +172,7 @@ def handle_scan(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 dedup_key=f"dispatch:{ctx.mode}:{repo}:{issue.number}",
                 max_attempts=s.job_max_attempts,
             )
+            request_label_sync(conn, task)
             created += 1
 
     with db.transaction(conn):

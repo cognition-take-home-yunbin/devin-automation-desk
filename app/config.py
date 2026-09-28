@@ -283,8 +283,9 @@ def doctor_report(env: dict[str, str] | None = None) -> tuple[bool, list[dict]]:
         )
         check(
             "live external writes",
-            False,
-            "milestone A does not implement live external writes",
+            True,
+            "issue status-label writes via GITHUB_TOKEN (issues write "
+            "scope required); issue bodies stay disabled",
         )
     elif mode == "simulation":
         check(

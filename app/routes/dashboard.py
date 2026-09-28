@@ -91,6 +91,7 @@ def _task_summary(row: sqlite3.Row, conn: sqlite3.Connection) -> TaskSummary:
         devin_session_url=row["devin_session_url"],
         slack_link=row["slack_link"],
         cleanup_state=row["cleanup_state"],
+        status_label=row["status_label"],
         head_sha=row["head_sha"],
         base_sha=row["base_sha"],
         acu_used=acu,

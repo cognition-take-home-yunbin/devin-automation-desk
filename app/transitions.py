@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from . import db, states
+from . import db, states, status_labels
 
 
 def audit(
@@ -59,7 +59,40 @@ def transition_task(
         new_value=new_state,
         detail=detail,
     )
-    return get_task(conn, task["id"])
+    task = get_task(conn, task["id"])
+    request_label_sync(conn, task)
+    return task
+
+
+def request_label_sync(
+    conn: sqlite3.Connection, task: sqlite3.Row
+) -> None:
+    """Queue a managed status-label sync when the task's desired label
+    differs from the last applied one. The enqueue shares the caller's
+    transaction, so a committed transition always has its sync job; a
+    pending one is not duplicated (the handler reconciles to the latest
+    state anyway, so a skipped enqueue can never go stale)."""
+    desired = status_labels.desired_label(task)
+    if desired == (task["status_label"] or None):
+        return
+    pending = conn.execute(
+        "SELECT 1 FROM jobs WHERE kind = ? AND status IN ('queued','claimed') "
+        "AND json_extract(payload_json, '$.task_id') = ? LIMIT 1",
+        (status_labels.SYNC_JOB_KIND, task["id"]),
+    ).fetchone()
+    if pending:
+        return
+    # Unique key per request: jobs.dedup_key is permanent, so reusing a key
+    # would silently drop every later sync for this task.
+    from .services import jobs
+
+    jobs.enqueue(
+        conn,
+        status_labels.SYNC_JOB_KIND,
+        {"task_id": task["id"]},
+        mode=task["mode"],
+        dedup_key=f"slabel:{task['mode']}:{task['id']}:{db.now()}",
+    )
 
 
 def add_evidence(

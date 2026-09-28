@@ -103,6 +103,10 @@ export default function TaskDrawer({
           <Row k="Review"><Chip state={task.review} /></Row>
           <Row k="Disposition"><Chip state={task.disposition} /></Row>
           <Row k="Cleanup"><Chip state={task.cleanup_state} /></Row>
+          <Row k="Issue label">
+            {/* the desk-managed devin-* status label on the GitHub issue */}
+            {task.status_label ? <code>{task.status_label}</code> : "—"}
+          </Row>
         </dl>
 
         <h3 className="small">Links</h3>
