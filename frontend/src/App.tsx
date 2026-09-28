@@ -8,6 +8,7 @@ import type {
   TaskSummary,
 } from "./types";
 import TaskDrawer from "./components/TaskDrawer";
+import ConfigModal from "./components/ConfigModal";
 import { Icon } from "./components/Icons";
 import {
   DIMENSION_HELP,
@@ -15,6 +16,7 @@ import {
   fmtAgo,
   fmtLocal,
   fmtNumber,
+  fmtACUWithUSD,
   fmtTime,
   greeting,
   humanize,
@@ -97,6 +99,8 @@ export default function App() {
   const [nativeSessions, setNativeSessions] = useState<NativeSession[]>([]);
   const [selected, setSelected] = useState<TaskDetail | null>(null);
   const [stale, setStale] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [config, setConfig] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; tone?: "bad" } | null>(null);
   const [filter, setFilter] = useState("");
@@ -110,16 +114,18 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [o, t, r, n] = await Promise.all([
+      const [o, t, r, n, c] = await Promise.all([
         api.overview(),
         api.tasks(),
         api.reports(),
         api.nativeSessions(),
+        api.getConfig(),
       ]);
       setOverview(o);
       setTasks(t);
       setReports(r);
       setNativeSessions(n);
+      setConfig(c);
       setStale(false);
       setError(null);
       if (selected) {
@@ -283,6 +289,14 @@ export default function App() {
               <Icon.Refresh size={17} />
             </button>
             <button
+              className="icon-btn"
+              onClick={() => setConfigModalOpen(true)}
+              title="Configure runtime settings"
+              aria-label="Configuration"
+            >
+              <Icon.Settings size={17} />
+            </button>
+            <button
               className="primary scan-now"
               onClick={scanNow}
               disabled={scanState === "sending"}
@@ -415,7 +429,7 @@ export default function App() {
                   label="Observed ACUs"
                   value={m.observed_acus}
                   unit="ACU"
-                  sub={`${String(m.acus_scope ?? "")} · ${fmtNumber(m.sessions_seen)} sessions`}
+                  sub={`${String(m.acus_scope ?? "")} · ${fmtNumber(m.sessions_seen)} sessions${m.observed_acus != null ? ` · ≈ ${fmtNumber(Number(m.observed_acus) * 2)} USD` : ''}`}
                 />
               </section>
 
@@ -502,7 +516,7 @@ export default function App() {
                             <th title={DIMENSION_HELP.review}>Review</th>
                             <th title={DIMENSION_HELP.disposition}>Disposition</th>
                             <th title="Time since the task was accepted.">Age</th>
-                            <th title="Latest cumulative ACU usage reported by the session.">ACUs</th>
+                            <th title="Latest cumulative ACU usage reported by the session.">ACUs (USD equiv)</th>
                             <th>Links</th>
                           </tr>
                         </thead>
@@ -551,7 +565,7 @@ export default function App() {
                                 <td><StateChip state={t.disposition} /></td>
                                 <td className="num-cell" title={fmtLocal(t.created_at)}>{fmtAgo(t.created_at)}</td>
                                 <td className="num-cell">
-                                  {t.acu_used != null ? fmtNumber(t.acu_used) : <span className="dim-text">unknown</span>}
+                                  {t.acu_used != null ? fmtACUWithUSD(t.acu_used) : <span className="dim-text">unknown</span>}
                                 </td>
                                 <td onClick={(e) => e.stopPropagation()}>
                                   <div className="links">
@@ -723,7 +737,7 @@ export default function App() {
                             <th>Session</th>
                             <th>Status</th>
                             <th>Detail</th>
-                            <th>ACUs</th>
+                            <th>ACUs (USD equiv)</th>
                             <th title="Only shown when an operator recorded the permalink.">Slack</th>
                             <th>Last seen</th>
                           </tr>
@@ -743,7 +757,7 @@ export default function App() {
                               <td><StateChip state={n.status} /></td>
                               <td className="small">{n.status_detail || "—"}</td>
                               <td className="num-cell">
-                                {n.acu_used != null ? fmtNumber(n.acu_used) : <span className="dim-text">unknown</span>}
+                                {n.acu_used != null ? fmtACUWithUSD(n.acu_used) : <span className="dim-text">unknown</span>}
                               </td>
                               <td>
                                 {n.slack_link ? (
@@ -775,6 +789,17 @@ export default function App() {
       </div>
 
       {selected && <TaskDrawer task={selected} onClose={() => setSelected(null)} />}
+      <ConfigModal
+        isOpen={configModalOpen}
+        onClose={() => setConfigModalOpen(false)}
+        config={config}
+        onSave={async (updates) => {
+          await api.updateConfig(updates);
+          const newConfig = await api.getConfig();
+          setConfig(newConfig);
+          setToast({ text: "Configuration saved successfully" });
+        }}
+      />
       {toast && (
         <div className={`toast glass ${toast.tone ?? ""}`} role="status">
           {toast.text}
@@ -945,6 +970,9 @@ function BudgetCard({ overview }: { overview: Overview }) {
           <div className="big">{pct}%</div>
           <div className="small">
             {fmtNumber(dailyLeft)} of {fmtNumber(dailyLimit)} ACU left
+            <span style={{ marginLeft: 6, color: "var(--muted)" }}>
+              (≈ ${fmtNumber(dailyLeft * 2)} / ${fmtNumber(dailyLimit * 2)} USD)
+            </span>
           </div>
         </div>
       </div>
@@ -952,14 +980,16 @@ function BudgetCard({ overview }: { overview: Overview }) {
         <div className="mini-stat">
           <div className="k">ACU held</div>
           <div className="v">{fmtNumber(m.budget_held_acu)}<small>reserved</small></div>
+          <small style={{ color: "var(--muted)" }}>≈ ${fmtNumber(Number(m.budget_held_acu) * 2)}</small>
         </div>
         <div className="mini-stat">
           <div className="k">Project left</div>
           <div className="v">{fmtNumber(m.project_admission_remaining)}<small>/ {fmtNumber(l.project_admission_acu_limit)}</small></div>
+          <small style={{ color: "var(--muted)" }}>≈ ${fmtNumber(Number(m.project_admission_remaining) * 2)} / ${fmtNumber(Number(l.project_admission_acu_limit) * 2)}</small>
         </div>
       </div>
       <p className="small" style={{ margin: "12px 0 0" }}>
-        Each repair reserves up to {fmtNumber(l.repair_acu_limit)} ACU before the session is
+        Each repair reserves up to {fmtACUWithUSD(l.repair_acu_limit)} before the session is
         created. Budgets govern managed dispatch only — native Slack conversations are not metered here.
       </p>
     </section>

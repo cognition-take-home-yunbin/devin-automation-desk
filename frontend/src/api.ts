@@ -20,6 +20,16 @@ export const api = {
   task: (id: number) => get<TaskDetail>(`/api/tasks/${id}`),
   reports: () => get<Report[]>("/api/reports"),
   nativeSessions: () => get<NativeSession[]>("/api/native-sessions"),
+  getConfig: () => get<Record<string, string>>("/api/config"),
+  updateConfig: (updates: Record<string, string>) =>
+    fetch("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(await res.text());
+      return (await res.json()) as Record<string, string>;
+    }),
   startScenario: (scenario: string) =>
     fetch("/api/simulation/scenarios", {
       method: "POST",

@@ -6,7 +6,7 @@ import {
   describeTask,
   fmtAgo,
   fmtLocal,
-  fmtNumber,
+  fmtACUWithUSD,
   fmtTime,
   humanize,
   stateChipClass,
@@ -181,8 +181,8 @@ export default function TaskDrawer({
                 {fmtLocal(task.created_at)} <span className="small">({fmtAgo(task.created_at)})</span>
               </Row>
               <Row k="ACUs">
-                {task.acu_used != null ? fmtNumber(task.acu_used) : "unknown"} used
-                {latest?.acu_limit ? ` · cap ${fmtNumber(latest.acu_limit)}` : ""}
+                {task.acu_used != null ? fmtACUWithUSD(task.acu_used) : "unknown"} used
+                {latest?.acu_limit ? ` · cap ${fmtACUWithUSD(latest.acu_limit)}` : ""}
               </Row>
               {task.last_error && (
                 <Row k="Last error"><span style={{ color: "var(--bad)" }}>{task.last_error}</span></Row>
@@ -229,7 +229,7 @@ export default function TaskDrawer({
                   {a.raw_detail && a.raw_detail !== a.raw_status && (
                     <span className="small">{a.raw_detail}</span>
                   )}
-                  {a.acu_used != null && <span className="small">{fmtNumber(a.acu_used)} ACU</span>}
+                  {a.acu_used != null && <span className="small">{fmtACUWithUSD(a.acu_used)}</span>}
                 </div>
                 <div className="small context-versions" style={{ marginTop: 6 }}>
                   tag {a.correlation_tag}

@@ -29,9 +29,18 @@ STATIC_DIR = Path(os.environ.get("STATIC_DIR", "frontend/dist"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Load settings first to get database path
     settings = load_settings()  # fail-closed: raises on invalid config
+    
+    # Then load runtime overrides from database
     conn = db.connect(settings.database_path)
     db.init_db(conn)
+    runtime_overrides = db.get_runtime_config(conn)
+    
+    # Reload settings with runtime overrides applied
+    if runtime_overrides:
+        settings = load_settings(runtime_overrides=runtime_overrides)
+    
     app.state.settings = settings
     app.state.conn = conn
 

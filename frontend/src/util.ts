@@ -35,6 +35,17 @@ export function fmtNumber(v: unknown): string {
   return String(v);
 }
 
+export function fmtACU(acu: number | null | undefined): string {
+  if (acu == null) return "unknown";
+  return fmtNumber(acu);
+}
+
+export function fmtACUWithUSD(acu: number | null | undefined): string {
+  if (acu == null) return "unknown";
+  const usd = acu * 2;
+  return `${fmtNumber(acu)} ACU ($${fmtNumber(usd)})`;
+}
+
 /** `agent_finished` → `Agent finished`. Raw value is kept in tooltips. */
 export function humanize(state: string | null | undefined): string {
   if (!state) return "—";
