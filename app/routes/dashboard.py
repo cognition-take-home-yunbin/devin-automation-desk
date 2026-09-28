@@ -7,7 +7,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from .. import db
 from ..models import (
@@ -447,6 +447,76 @@ def request_scan(request: Request, conn: sqlite3.Connection = Conn) -> ScanReque
             source="operator", detail="scan now via dashboard",
         )
     return ScanRequestOut(mode=s.app_mode, job_id=job_id, queued=True)
+
+
+# Configuration keys that can be modified through the UI
+CONFIGURABLE_KEYS = {
+    "MAX_ACTIVE_SESSIONS": "int",
+    "REPAIR_ACU_LIMIT": "int",
+    "DAILY_ADMISSION_ACU_LIMIT": "int",
+    "PROJECT_ADMISSION_ACU_LIMIT": "int",
+    "POLL_INTERVAL_SECONDS": "float",
+    "SCAN_INTERVAL_SECONDS": "float",
+    "REPORT_PUBLISH_INTERVAL_SECONDS": "float",
+    "REPORT_STALE_AFTER_SECONDS": "float",
+}
+
+
+@router.get("/api/config")
+def get_config(request: Request, conn: sqlite3.Connection = Conn) -> dict:
+    """Get current configuration with runtime overrides."""
+    s = request.app.state.settings
+    runtime_overrides = db.get_runtime_config(conn)
+    
+    config = {}
+    for key in CONFIGURABLE_KEYS:
+        # Use runtime override if exists, otherwise use env default
+        if key in runtime_overrides:
+            config[key] = runtime_overrides[key]
+        else:
+            # Get from settings
+            attr_name = key.lower()
+            if hasattr(s, attr_name):
+                config[key] = str(getattr(s, attr_name))
+    
+    return config
+
+
+@router.put("/api/config")
+def update_config(request: Request, conn: sqlite3.Connection = Conn, updates: dict = Body(...)) -> dict:
+    """Update configuration values in the database."""
+    runtime_overrides = db.get_runtime_config(conn)
+    
+    with db.transaction(conn):
+        for key, value in updates.items():
+            if key not in CONFIGURABLE_KEYS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Key {key} is not configurable through the UI"
+                )
+            
+            # Validate type
+            expected_type = CONFIGURABLE_KEYS[key]
+            try:
+                if expected_type == "int":
+                    int(value)
+                elif expected_type == "float":
+                    float(value)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid value for {key}: expected {expected_type}"
+                )
+            
+            # Store in database
+            db.set_runtime_config(conn, key, str(value))
+        
+        audit(
+            conn, action="config_updated", mode=request.app.state.settings.app_mode,
+            source="operator", detail=f"Updated config keys: {list(updates.keys())}"
+        )
+    
+    return get_config(request, conn)
 
 
 @router.post("/api/simulation/scenarios", response_model=SimulationResult)

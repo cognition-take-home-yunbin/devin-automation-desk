@@ -109,8 +109,12 @@ def _get_csv(raw: dict[str, str], name: str) -> tuple[str, ...]:
     return tuple(v.strip() for v in raw.get(name, "").split(",") if v.strip())
 
 
-def load_settings(env: dict[str, str] | None = None) -> Settings:
+def load_settings(env: dict[str, str] | None = None, runtime_overrides: dict[str, str] | None = None) -> Settings:
     raw = dict(os.environ if env is None else env)
+    
+    # Apply runtime overrides from database
+    if runtime_overrides:
+        raw = {**raw, **runtime_overrides}
 
     app_mode = _get(raw, "APP_MODE", "").lower()
     if app_mode not in APP_MODES:

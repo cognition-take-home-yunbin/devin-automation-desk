@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS control (
     updated_at REAL NOT NULL
 );
 
+-- runtime configuration (overrides env defaults)
+CREATE TABLE IF NOT EXISTS runtime_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     mode TEXT NOT NULL CHECK (mode IN ('simulation', 'live')),
@@ -382,6 +389,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         if column not in cols:
             conn.execute(ddl)
+    
+    # Create runtime_config table if it doesn't exist (for v4 migration)
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "runtime_config" not in tables:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS runtime_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
 
 
 _savepoint_counter = 0
@@ -428,3 +446,22 @@ def loads(text: str | None, default: Any = None) -> Any:
     if text is None:
         return default
     return json.loads(text)
+
+
+def get_runtime_config(conn: sqlite3.Connection) -> dict[str, str]:
+    """Load all runtime config values from database."""
+    rows = conn.execute("SELECT key, value FROM runtime_config").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def set_runtime_config(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Set a runtime config value in database."""
+    conn.execute(
+        "INSERT OR REPLACE INTO runtime_config (key, value, updated_at) VALUES (?, ?, ?)",
+        (key, value, time.time())
+    )
+
+
+def delete_runtime_config(conn: sqlite3.Connection, key: str) -> None:
+    """Delete a runtime config value from database."""
+    conn.execute("DELETE FROM runtime_config WHERE key = ?", (key,))

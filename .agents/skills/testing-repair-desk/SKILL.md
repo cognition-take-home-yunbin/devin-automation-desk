@@ -31,9 +31,10 @@ description: How to run and end-to-end test the Devin Repair Desk dashboard in s
 
 ## Dashboard under test
 
-- Header: mode badge, repo, PAUSED badge, `SCAN STALE {age}s` badge, refresh/stale text. Metrics row: active tasks, needs intervention, verified PRs, merged PRs, observed ACUs, ACU held (live reservations), daily admission left (sub: project left N).
-- Task rows: issue #+title+SYNTHETIC tag, approver, 4 state chips (execution/validation/review/disposition), elapsed, ACUs, PR/session links. Click a row → detail drawer (issue snapshot, attempts with correlation tags, evidence, audit timeline). Escape or ✕ or backdrop closes.
-- "Filter by state" dropdown filters rows across all 4 dimensions.
+- Top bar: brand, section nav pills (Overview/Tasks/Reports/Native sessions), mode pill (`SIMULATION`/`LIVE`), Refresh, `Scan now`. Greeting row shows repo + tracked-task count; its status strip carries the PAUSED / `SCAN STALE {age}s` / REPORT STALE / NATIVE OBS UNAVAILABLE badges and the `Live · refreshed …` / `Stale — last good data retained (...)` text.
+- Hero metrics (4 cards): active tasks (sub: total tracked, `N blocked` pill), needs intervention, verified PRs (sub: operator-verified · merged), observed ACUs (sub: scope · sessions). Right sidebar: **Desk health** (scanner / dispatch / report publication / native observation signals), **Daily admission budget** gauge (% remaining, ACU held, project left), **Where tasks are** (execution-state bar chart).
+- Task rows: issue #+title+SYNTHETIC tag, a plain-language headline (e.g. "PR independently verified · awaiting human review"), `approved by <actor>`, 4 state chips (execution/validation/review/disposition, humanized — raw value in the chip `title`), age, ACUs, PR/session/slack link pills, delete icon button. Click a row → detail drawer (issue snapshot, attempts with correlation tags, evidence grouped by provenance, audit timeline newest-first). Escape or ✕ or backdrop closes.
+- Quick filter tabs (All / In progress / Needs attention / Delivered / Ended) plus an "Any state" select filter rows across all 4 dimensions; both compose.
 - needs_input evidence carries the scripted question (e.g. "Which baseline SHA should I use?").
 - Row Links column shows a `slack` anchor when `slack_link` is set; drawer has a `Cleanup` chip (pending/kept/terminated) + `Slack` field.
 
