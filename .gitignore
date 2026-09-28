@@ -9,6 +9,10 @@ venv/
 # node
 node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
 
 # data & env
 .env
