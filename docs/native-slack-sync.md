@@ -2,10 +2,6 @@
 
 ## Constraint
 
-The PRD forbids a custom Slack surface: no Slack app, no Slack SDK client,
-no command endpoint, no webhook gateway, no tunnel. Any Slack-side
-conversation about a repair must ride **Devin's own Slack integration**.
-
 The desk creates repair sessions through the **Devin v3 API**
 (`POST /v3/organizations/{org}/sessions`), not through Slack. The open
 question is whether a session born that way can still carry a *native*

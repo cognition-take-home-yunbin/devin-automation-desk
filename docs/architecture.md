@@ -17,7 +17,7 @@ restart loses nothing.
   `attempts`, `jobs`, `evidence`, `audit_events`, `report_snapshots`,
   `publication_records`, `control`, `budget_reservations`,
   `cleanup_records`, plus `sim_*` fixture tables (simulation).
-- **`app/states.py`** — the PRD's four task dimensions and the legal
+- **`app/states.py`** — the four task dimensions and the legal
   transition map; `app/transitions.py` enforces it and writes audit events.
 - **`app/services/`** — job handlers:
   - `scanner` — durable intake: candidates → both labels + latest
@@ -161,7 +161,7 @@ handlers are identical in both modes — fake providers script the same
 failure names (`rate_limited`, `ambiguous_creation`, boom) the live clients
 raise.
 
-## Failure containment (PRD F-series highlights)
+## Failure containment
 
 - **Intake freeze + dispatch re-verify**: accepted content drifting or
   approval withdrawn before dispatch stops the task for review — no spend.

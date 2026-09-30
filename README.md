@@ -201,7 +201,7 @@ In the Devin org, create and record IDs for:
 
 Set `DEVIN_REPO_REF` to the fork the API sessions should use.
 
-### 6. Native Slack (no custom Slack app)
+### 6. Native Slack
 
 1. Install Devin's official Slack app in the demo workspace; link identities.
 2. Do **not** create a bot token / signing secret for this desk.

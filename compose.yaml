@@ -16,6 +16,9 @@ services:
     volumes:
       - app-data:/data
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
 
   test:
     profiles: ["test"]
