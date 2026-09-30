@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Repair Desk: from approved bug to verified pull request</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500&family=Newsreader:opsz,wght@6..72,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f7f6f5;
+    --card: #fdfcfb;
+    --ink: #000000;
+    --muted: #5f5d5a;
+    --rule: #d8d5d1;
+    --blue: #0294DE;
+    --blue-strong: #0277B6;
+    --blue-tint: #e7f3fb;
+    --on-blue: #ffffff;
+    --green: #21C19A;
+    --green-ink: #0f7f63;
+    --indigo: #3969CA;
+    --display: "Hanken Grotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #1a1918; --card: #232220; --ink: #f7f6f5; --muted: #a8a5a0; --rule: #3b3936;
+      --blue-strong: #0294DE; --blue-tint: #10283a; --on-blue: #1a1918;
+      --green-ink: #21C19A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #1a1918; --card: #232220; --ink: #f7f6f5; --muted: #a8a5a0; --rule: #3b3936;
+    --blue-strong: #0294DE; --blue-tint: #10283a; --on-blue: #1a1918;
+    --green-ink: #21C19A;
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+  body {
+    margin: 0; height: 100%;
+    background: var(--paper); color: var(--ink);
+    font-family: var(--serif);
+    -webkit-font-smoothing: antialiased;
+  }
+  .app {
+    min-height: 100%;
+    max-width: 1360px; margin: 0 auto;
+    padding: clamp(16px, 3vh, 28px) clamp(16px, 3vw, 44px);
+    display: grid;
+    grid-template-rows: auto auto auto 1fr auto;
+  }
+
+  /* Header */
+  .top {
+    display: flex; justify-content: space-between; align-items: baseline;
+    flex-wrap: wrap; gap: 12px 28px;
+    border-bottom: 1px solid var(--ink); padding-bottom: 14px;
+  }
+  .brand { font: 500 17px/1 var(--display); letter-spacing: -0.005em; }
+  .brand span { color: var(--muted); font-weight: 400; }
+  .tabs { display: flex; gap: 26px; flex-wrap: wrap; }
+  .tabs button {
+    font: 400 15px/1 var(--display); color: var(--muted);
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    padding: 6px 0 8px; cursor: pointer; border-radius: 0;
+  }
+  .tabs button .n { font-variant-numeric: tabular-nums; margin-right: 7px; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .tabs button:hover { color: var(--ink); }
+
+  /* Copy */
+  .copy { padding: clamp(22px, 5vh, 48px) 0 clamp(8px, 2vh, 18px); min-height: 11.5em; transition: opacity .3s; }
+  .copy.fade { opacity: 0; }
+  h1 {
+    font: 400 clamp(28px, 3.4vw, 46px)/1.1 var(--display);
+    letter-spacing: -0.02em; margin: 0 0 14px; max-width: 24ch;
+  }
+  .sub { font-size: clamp(17px, 1.45vw, 20px); line-height: 1.5; color: var(--muted); max-width: 60ch; margin: 0; }
+
+  /* Stage */
+  .stage-wrap { overflow-x: auto; overflow-y: hidden; }
+  #stage { display: block; width: 100%; min-width: 920px; height: auto; }
+  #stage text { font-family: var(--display); }
+
+  .lane-lbl { font-size: 14px; fill: var(--muted); }
+  .lane-state { font-size: 14px; fill: var(--ink); transition: opacity .3s; }
+  .lane-state.ok { fill: var(--green-ink); }
+  .lane { stroke: var(--ink); stroke-width: 2; transition: stroke .3s, stroke-width .3s; }
+  .lane.paused { stroke: var(--muted); stroke-dasharray: 5 8; }
+  .pull { stroke: var(--muted); stroke-width: 1.25; stroke-dasharray: 3 5; opacity: 0; transition: opacity .25s; }
+  .pull.show { opacity: 1; }
+
+  .wire { stroke: var(--ink); stroke-width: 1.25; }
+  .arrow { fill: var(--ink); }
+
+  .node .body { fill: var(--card); stroke: var(--ink); stroke-width: 1.25; transition: stroke-width .2s, fill .2s; }
+  .node .lbl { font-size: 16px; fill: var(--ink); }
+  .node .lbl-s { font-size: 14px; fill: var(--ink); }
+  .node.lit .body { stroke-width: 3; }
+  .node.gate .body { stroke-width: 3; }
+  .node.gate.lit .body { stroke-width: 5; }
+  .node.desk .body { stroke: var(--indigo); stroke-width: 1.5; }
+  .node.desk.lit .body { stroke-width: 3.5; }
+  .node.devin .body { fill: var(--blue-tint); stroke: var(--blue); stroke-width: 1.5; }
+  .node.verify .body { stroke: var(--green); stroke-width: 1.5; }
+  .node.verify.lit .body { stroke-width: 3.5; }
+
+  /* Bottlenecks: the heaviest shapes on the page */
+  .node.bn .body { fill: var(--ink); stroke: var(--ink); }
+  .node.bn .lbl, .node.bn .lbl-s { fill: var(--paper); }
+  .track { fill: var(--paper); opacity: .25; }
+  .bar { fill: var(--paper); }
+  .slot { fill: none; stroke: var(--paper); stroke-opacity: .3; }
+  .slot.on { fill: var(--paper); stroke: none; }
+  .qmore { font-size: 12px; fill: var(--paper); }
+
+  .cell rect { fill: none; stroke-width: 1; transition: fill .15s; }
+  .cell text { font-size: 12px; text-anchor: middle; }
+  .bn .cell rect { stroke: var(--paper); stroke-opacity: .45; }
+  .bn .cell text { fill: var(--paper); }
+  .bn .cell.on rect { fill: var(--paper); stroke-opacity: 1; }
+  .bn .cell.on text { fill: var(--ink); }
+  .devin .cell rect { stroke: var(--blue); }
+  .devin .cell text { fill: var(--ink); }
+  .devin .cell.on rect { fill: var(--blue-strong); stroke: var(--blue-strong); }
+  .devin .cell.on text { fill: var(--on-blue); }
+
+  .token { fill: var(--ink); stroke: var(--paper); stroke-width: 1.5; }
+  .token.ok { fill: var(--green); }
+
+  .callout { opacity: 0; transform: translateY(6px); transform-box: fill-box; transition: opacity .5s ease, transform .5s ease; }
+  .callout.shown { opacity: 1; transform: none; }
+  .callout .ct { font-size: 16px; font-weight: 500; fill: var(--ink); }
+  .callout .cd { font-family: var(--serif) !important; font-size: 15px; fill: var(--muted); }
+  .badge rect { fill: var(--ink); }
+  .badge text { font-size: 12px; font-weight: 500; fill: var(--paper); text-anchor: middle; }
+  .mk-ink { fill: var(--ink); }
+  .mk-blue { fill: var(--blue); }
+  .mk-green { fill: var(--green); }
+
+  .scene { opacity: 0; visibility: hidden; transition: opacity .35s ease, visibility 0s linear .35s; }
+  .scene.on { opacity: 1; visibility: visible; transition: opacity .35s ease; }
+  #solution.quiet .callout { opacity: 0 !important; }
+  #solution .dim { transition: opacity .35s; }
+  #solution.focus .dim { opacity: .18; }
+  #solution.focus .dim.hl { opacity: 1; }
+  #solution.focus .lane.hl { stroke: var(--green); stroke-width: 3.5; }
+
+  /* Benefits */
+  .benefits {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: clamp(16px, 3vw, 44px);
+    padding-top: clamp(14px, 3vh, 26px);
+    visibility: hidden; opacity: 0; transition: opacity .4s;
+  }
+  .benefits.on { visibility: visible; opacity: 1; }
+  .benefit {
+    all: unset; display: block; cursor: default;
+    border-top: 1px solid var(--ink); padding-top: 16px;
+    opacity: .38; transition: opacity .3s, border-top-width .2s, padding-top .2s;
+  }
+  .benefit.on { opacity: 1; border-top-width: 3px; padding-top: 14px; }
+  .benefit h2 { font: 400 clamp(20px, 1.8vw, 24px)/1.2 var(--display); letter-spacing: -0.01em; margin: 0 0 8px; }
+  .benefit p { font: 400 clamp(16px, 1.3vw, 18px)/1.5 var(--serif); margin: 0; max-width: 38ch; }
+
+  /* Controls */
+  .controls {
+    display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap;
+    border-top: 1px solid var(--rule); margin-top: clamp(16px, 3vh, 28px); padding-top: 12px;
+    font: 400 13px/1 var(--display); color: var(--muted);
+  }
+  body.clean .controls { visibility: hidden; }
+  .btn {
+    font: 400 14px/1 var(--display); color: var(--ink);
+    background: transparent; border: 1px solid var(--ink); border-radius: 0;
+    padding: 8px 14px; cursor: pointer;
+  }
+  .btn:hover { background: var(--ink); color: var(--paper); }
+  .progress { flex: 1 1 160px; height: 2px; background: var(--rule); position: relative; min-width: 120px; }
+  .progress i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--ink); }
+  .hint { display: flex; gap: 14px; flex-wrap: wrap; }
+  kbd { font: 400 12px/1 var(--display); border: 1px solid var(--rule); padding: 3px 6px; margin-right: 4px; color: var(--ink); }
+
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+  @media (max-width: 760px) {
+    .benefits { grid-template-columns: 1fr; }
+    .copy { min-height: 0; }
+    .hint { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .callout, .scene, .copy, .benefits, .benefit, .lane, .node .body { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">Repair Desk <span>built on Devin</span></div>
+    <nav class="tabs" role="tablist" aria-label="Story">
+      <button role="tab" aria-selected="true" data-scene="0"><span class="n">1</span>Today</button>
+      <button role="tab" aria-selected="false" data-scene="1"><span class="n">2</span>With Repair Desk</button>
+      <button role="tab" aria-selected="false" data-scene="2"><span class="n">3</span>What changes</button>
+    </nav>
+  </header>
+
+  <section class="copy" id="copy" aria-live="polite">
+    <h1 id="headline">Reproduced bugs still wait for an engineer.</h1>
+    <p class="sub" id="sub">Each fix pulls someone off feature work to find the code, reproduce the bug, fix it and write the test.</p>
+  </section>
+
+  <div class="stage-wrap">
+    <svg id="stage" viewBox="0 0 1280 330" role="img" aria-labelledby="stageTitle stageDesc">
+      <title id="stageTitle">Bug repair workflow</title>
+      <desc id="stageDesc"></desc>
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path class="arrow" d="M0 0 L10 5 L0 10 z"/>
+        </marker>
+      </defs>
+
+      <!-- ============ Scene 1: today ============ -->
+      <g id="problem" class="scene on">
+        <text class="lane-lbl" x="20" y="44">Feature work</text>
+        <text id="laneStateP" class="lane-state" x="1260" y="44" text-anchor="end"></text>
+        <line id="laneP" class="lane" x1="20" y1="66" x2="1260" y2="66"/>
+        <line id="pullP" class="pull" x1="655" y1="66" x2="655" y2="146"/>
+
+        <line class="wire" x1="150" y1="216" x2="178" y2="216" marker-end="url(#arr)"/>
+        <line class="wire" x1="330" y1="216" x2="358" y2="216" marker-end="url(#arr)"/>
+        <line class="wire" x1="550" y1="216" x2="578" y2="216" marker-end="url(#arr)"/>
+        <line class="wire" x1="730" y1="216" x2="758" y2="216" marker-end="url(#arr)"/>
+        <line class="wire" x1="1060" y1="216" x2="1088" y2="216" marker-end="url(#arr)"/>
+
+        <g class="node">
+          <rect class="body" x="20" y="146" width="130" height="84"/>
+          <text class="lbl" x="34" y="176">Bug reported</text>
+        </g>
+        <g class="node">
+          <rect class="body" x="180" y="146" width="150" height="84"/>
+          <text class="lbl" x="194" y="176">Reproduced</text>
+          <text class="lbl" x="194" y="196">and triaged</text>
+        </g>
+        <g class="node bn">
+          <rect class="body" x="360" y="146" width="190" height="84"/>
+          <text class="lbl" x="374" y="170">Backlog</text>
+          <text id="qCount" class="lbl-s" x="536" y="170" text-anchor="end">0 waiting</text>
+          <g id="slots"></g>
+          <text id="qMore" class="qmore" x="536" y="224" text-anchor="end"></text>
+        </g>
+        <g class="node bn">
+          <rect class="body" x="580" y="146" width="150" height="84"/>
+          <text class="lbl" x="594" y="170">Engineer</text>
+          <text class="lbl" x="594" y="190">switches over</text>
+          <rect class="track" x="594" y="210" width="122" height="4"/>
+          <rect id="swBar" class="bar" x="594" y="210" width="0" height="4"/>
+        </g>
+        <g class="node bn" id="loopP">
+          <rect class="body" x="760" y="146" width="300" height="84"/>
+          <text class="lbl" x="774" y="168">Fixed by hand</text>
+          <g class="cell"><rect x="774" y="178" width="64" height="30"/><text x="806" y="197">Find code</text></g>
+          <g class="cell"><rect x="844" y="178" width="64" height="30"/><text x="876" y="197">Reproduce</text></g>
+          <g class="cell"><rect x="914" y="178" width="64" height="30"/><text x="946" y="197">Fix</text></g>
+          <g class="cell"><rect x="984" y="178" width="64" height="30"/><text x="1016" y="197">Test</text></g>
+        </g>
+        <g class="node">
+          <rect class="body" x="1090" y="146" width="170" height="84"/>
+          <text class="lbl" x="1104" y="176">Review</text>
+          <text class="lbl" x="1104" y="196">and merge</text>
+        </g>
+
+        <g class="callout" id="c1">
+          <g class="badge"><rect x="360" y="252" width="20" height="20"/><text x="370" y="266">1</text></g>
+          <text class="ct" x="390" y="267">Queue</text>
+          <text class="cd" x="360" y="294">Ready bugs wait behind</text>
+          <text class="cd" x="360" y="313">feature work.</text>
+        </g>
+        <g class="callout" id="c2">
+          <g class="badge"><rect x="580" y="252" width="20" height="20"/><text x="590" y="266">2</text></g>
+          <text class="ct" x="610" y="267">Context switch</text>
+          <text class="cd" x="580" y="294">Someone drops what</text>
+          <text class="cd" x="580" y="313">they were building.</text>
+        </g>
+        <g class="callout" id="c3">
+          <g class="badge"><rect x="760" y="252" width="20" height="20"/><text x="770" y="266">3</text></g>
+          <text class="ct" x="790" y="267">Manual loop</text>
+          <text class="cd" x="760" y="294">Find, reproduce, fix and test,</text>
+          <text class="cd" x="760" y="313">one bug at a time.</text>
+        </g>
+
+        <g id="tokP"></g>
+      </g>
+
+      <!-- ============ Scene 2 and 3: with Repair Desk ============ -->
+      <g id="solution" class="scene">
+        <text class="lane-lbl" x="20" y="44">Feature work</text>
+        <text class="lane-state ok" x="1260" y="44" text-anchor="end">Uninterrupted</text>
+        <line id="laneS" class="lane dim" data-b="0" x1="20" y1="66" x2="1260" y2="66"/>
+
+        <g class="dim">
+          <line class="wire" x1="150" y1="216" x2="178" y2="216" marker-end="url(#arr)"/>
+          <line class="wire" x1="330" y1="216" x2="358" y2="216" marker-end="url(#arr)"/>
+          <line class="wire" x1="500" y1="216" x2="528" y2="216" marker-end="url(#arr)"/>
+          <line class="wire" x1="830" y1="216" x2="858" y2="216" marker-end="url(#arr)"/>
+          <line class="wire" x1="970" y1="216" x2="998" y2="216" marker-end="url(#arr)"/>
+          <line class="wire" x1="1110" y1="216" x2="1138" y2="216" marker-end="url(#arr)"/>
+        </g>
+
+        <g class="node dim">
+          <rect class="body" x="20" y="146" width="130" height="84"/>
+          <text class="lbl" x="34" y="176">Bug reported</text>
+        </g>
+        <g class="node gate dim" id="sB" data-b="1">
+          <rect class="body" x="180" y="146" width="150" height="84"/>
+          <text class="lbl" x="194" y="176">Maintainer</text>
+          <text class="lbl" x="194" y="196">approves</text>
+        </g>
+        <g class="node desk dim" id="sC" data-b="2">
+          <rect class="body" x="360" y="146" width="140" height="84"/>
+          <text class="lbl" x="374" y="176">Repair Desk</text>
+          <text class="lbl-s" x="374" y="196">starts a session</text>
+        </g>
+        <g class="node devin dim" id="sD" data-b="0">
+          <rect class="body" x="530" y="146" width="300" height="84"/>
+          <text class="lbl" x="544" y="168">Devin session</text>
+          <g class="cell"><rect x="544" y="178" width="64" height="30"/><text x="576" y="197">Find code</text></g>
+          <g class="cell"><rect x="614" y="178" width="64" height="30"/><text x="646" y="197">Reproduce</text></g>
+          <g class="cell"><rect x="684" y="178" width="64" height="30"/><text x="716" y="197">Fix</text></g>
+          <g class="cell"><rect x="754" y="178" width="64" height="30"/><text x="786" y="197">Test</text></g>
+        </g>
+        <g class="node dim" id="sE">
+          <rect class="body" x="860" y="146" width="110" height="84"/>
+          <text class="lbl" x="874" y="176">Pull request</text>
+          <text class="lbl" x="874" y="196">opened</text>
+        </g>
+        <g class="node verify dim" id="sF" data-b="2">
+          <rect class="body" x="1000" y="146" width="110" height="84"/>
+          <text class="lbl" x="1014" y="176">Verified</text>
+          <text class="lbl" x="1014" y="196">against CI</text>
+        </g>
+        <g class="node gate dim" id="sG" data-b="1">
+          <rect class="body" x="1140" y="146" width="120" height="84"/>
+          <text class="lbl" x="1154" y="176">Review</text>
+          <text class="lbl" x="1154" y="196">and merge</text>
+        </g>
+
+        <g class="callout" id="s1">
+          <rect class="mk-ink" x="180" y="256" width="12" height="12"/>
+          <text class="ct" x="200" y="267">Your call</text>
+          <text class="cd" x="180" y="294">Only allowlisted</text>
+          <text class="cd" x="180" y="313">maintainers can approve.</text>
+        </g>
+        <g class="callout" id="s2">
+          <rect class="mk-blue" x="530" y="256" width="12" height="12"/>
+          <text class="ct" x="550" y="267">Devin does the engineering</text>
+          <text class="cd" x="530" y="294">In its own environment,</text>
+          <text class="cd" x="530" y="313">from issue to pull request.</text>
+        </g>
+        <g class="callout" id="s3">
+          <rect class="mk-green" x="1000" y="256" width="12" height="12"/>
+          <text class="ct" x="1018" y="267">Checked</text>
+          <text class="cd" x="1000" y="294">Not Devin's</text>
+          <text class="cd" x="1000" y="313">own report.</text>
+        </g>
+        <g class="callout" id="s4">
+          <rect class="mk-ink" x="1140" y="256" width="12" height="12"/>
+          <text class="ct" x="1160" y="267">Your call</text>
+          <text class="cd" x="1140" y="294">Nothing merges</text>
+          <text class="cd" x="1140" y="313">without review.</text>
+        </g>
+
+        <g id="tokS"></g>
+      </g>
+    </svg>
+  </div>
+
+  <section class="benefits" id="benefits" aria-label="Benefits">
+    <button class="benefit" data-b="0">
+      <h2>Engineers stay on feature work</h2>
+      <p>Devin takes the find, reproduce, fix and test loop. No one leaves their sprint for a contained bug.</p>
+    </button>
+    <button class="benefit" data-b="1">
+      <h2>Your team keeps control</h2>
+      <p>Work starts only on an allowlisted maintainer's approval, and nothing merges without a reviewer.</p>
+    </button>
+    <button class="benefit" data-b="2">
+      <h2>Every fix is verified and costed</h2>
+      <p>CI is checked on the pull request's latest commit. Each session has a spending cap, so you see what every repair cost.</p>
+    </button>
+  </section>
+
+  <footer class="controls">
+    <button class="btn" id="prev">Back</button>
+    <button class="btn" id="play">Play 30 s</button>
+    <button class="btn" id="next">Next</button>
+    <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+    <div class="hint">
+      <span><kbd>←</kbd><kbd>→</kbd>step</span>
+      <span><kbd>Space</kbd>play</span>
+      <span><kbd>H</kbd>hide controls</span>
+      <span><kbd>T</kbd>theme</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const $ = id => document.getElementById(id);
+
+  const SCENES = [
+    { group: 'problem',
+      h: 'Reproduced bugs still wait for an engineer.',
+      s: 'Each fix pulls someone off feature work to find the code, reproduce the bug, fix it and write the test.',
+      desc: 'Today: bugs are reported and triaged, then pile up in a backlog. An engineer must stop feature work, then find the code, reproduce, fix and test by hand before review and merge. Three bottlenecks: the queue, the context switch, and the manual loop.' },
+    { group: 'solution',
+      h: 'A maintainer approves. Devin delivers a tested pull request.',
+      s: 'Repair Desk turns the approval into a Devin session, checks the result against CI, and leaves the merge to your team.',
+      desc: 'With Repair Desk: a maintainer approves a bug, Repair Desk starts a Devin session, Devin finds the code, reproduces, fixes and tests, opens a pull request, the result is verified against CI, and a human reviews and merges. Feature work continues uninterrupted.' },
+    { group: 'solution',
+      h: 'What changes for your team',
+      s: '',
+      desc: 'Three benefits: engineers stay on feature work; your team keeps control of approval and merge; every fix is verified and its cost is visible.' }
+  ];
+  const DUR = [12, 12, 6];          // autoplay seconds per scene (30 s total)
+  const TOTAL = DUR.reduce((a, b) => a + b, 0);
+
+  let cur = 0;
+  let timers = [];
+  const auto = { on: false, t: 0 };
+
+  /* ---------- Scene 1 simulation ---------- */
+  const slotsG = $('slots');
+  const slots = [];
+  for (let i = 0; i < 20; i++) {
+    const r = document.createElementNS(NS, 'rect');
+    r.setAttribute('x', 374 + (i % 10) * 16);
+    r.setAttribute('y', 182 + Math.floor(i / 10) * 16);
+    r.setAttribute('width', 12); r.setAttribute('height', 12);
+    r.setAttribute('class', 'slot');
+    slotsG.appendChild(r); slots.push(r);
+  }
+  const loopCells = [...document.querySelectorAll('#loopP .cell')];
+  const tokP = $('tokP');
+  let P;
+  function resetP() {
+    tokP.replaceChildren();
+    P = { tokens: [], queue: 0, spawnT: 0.2, phase: 'idle', t: 0, step: 0 };
+  }
+  const SPEED = 190, SPAWN = 1.15, SWITCH = 1.3, STEP = 0.95, REST = 0.6;
+  function updP(dt) {
+    P.spawnT -= dt;
+    if (P.spawnT <= 0) { P.tokens.push({ x: -12, kind: 'in' }); P.spawnT += SPAWN; }
+    P.tokens = P.tokens.filter(tk => {
+      tk.x += SPEED * dt;
+      if (tk.kind === 'in' && tk.x >= 352) { P.queue++; tk.el && tk.el.remove(); return false; }
+      if (tk.kind === 'out' && tk.x > 1300) { tk.el && tk.el.remove(); return false; }
+      return true;
+    });
+    P.t += dt;
+    if (P.phase === 'idle' && P.queue > 0) { P.queue--; P.phase = 'switch'; P.t = 0; }
+    else if (P.phase === 'switch' && P.t >= SWITCH) { P.phase = 'loop'; P.step = 0; P.t = 0; }
+    else if (P.phase === 'loop' && P.t >= STEP) {
+      P.step++; P.t = 0;
+      if (P.step >= 4) { P.tokens.push({ x: 1066, kind: 'out' }); P.phase = 'rest'; }
+    }
+    else if (P.phase === 'rest' && P.t >= REST) { P.phase = 'idle'; P.t = 0; }
+  }
+  function renderP() {
+    for (const tk of P.tokens) {
+      if (!tk.el) {
+        tk.el = document.createElementNS(NS, 'rect');
+        tk.el.setAttribute('class', 'token');
+        tk.el.setAttribute('width', 10); tk.el.setAttribute('height', 10);
+        tk.el.setAttribute('y', 211);
+        tokP.appendChild(tk.el);
+      }
+      tk.el.setAttribute('x', (tk.x - 5).toFixed(1));
+    }
+    slots.forEach((s, i) => s.classList.toggle('on', i < P.queue));
+    $('qCount').textContent = P.queue + ' waiting';
+    $('qMore').textContent = P.queue > 20 ? '+' + (P.queue - 20) : '';
+    $('swBar').setAttribute('width', P.phase === 'switch' ? (122 * Math.min(1, P.t / SWITCH)).toFixed(1) : 0);
+    loopCells.forEach((c, i) => c.classList.toggle('on', P.phase === 'loop' && P.step === i));
+    const busy = P.phase === 'switch' || P.phase === 'loop';
+    $('laneP').classList.toggle('paused', busy);
+    $('pullP').classList.toggle('show', busy);
+    $('laneStateP').textContent = busy ? 'Paused for a bug fix' : 'Running';
+  }
+
+  /* ---------- Scene 2 simulation ---------- */
+  const tokS = $('tokS');
+  const devinCells = [...document.querySelectorAll('#sD .cell')];
+  const WP = [
+    { x: 85 },
+    { x: 255, d: 0.4, n: 'sB' },
+    { x: 430, d: 0.35, n: 'sC' },
+    { x: 576, d: 0.28, c: 0 },
+    { x: 646, d: 0.28, c: 1 },
+    { x: 716, d: 0.28, c: 2 },
+    { x: 786, d: 0.28, c: 3 },
+    { x: 915, d: 0.2, n: 'sE' },
+    { x: 1055, d: 0.35, n: 'sF', ok: true },
+    { x: 1200, d: 0.4, n: 'sG' },
+    { x: 1300 }
+  ];
+  const litNodes = ['sB', 'sC', 'sE', 'sF', 'sG'];
+  let S;
+  function resetS() {
+    tokS.replaceChildren();
+    S = { tokens: [], spawnT: 0.1, time: 0, lit: {}, cell: [0, 0, 0, 0] };
+  }
+  const SPEED2 = 240, SPAWN2 = 1.5;
+  function updS(dt) {
+    S.time += dt;
+    S.spawnT -= dt;
+    if (S.spawnT <= 0) { S.tokens.push({ x: -12, wi: 0, dwell: 0, ok: false }); S.spawnT += SPAWN2; }
+    S.tokens = S.tokens.filter(tk => {
+      if (tk.dwell > 0) { tk.dwell -= dt; return true; }
+      const wp = WP[tk.wi];
+      tk.x = Math.min(wp.x, tk.x + SPEED2 * dt);
+      if (tk.x >= wp.x) {
+        if (wp.d) {
+          tk.dwell = wp.d;
+          if (wp.n) S.lit[wp.n] = S.time + wp.d + 0.12;
+          if (wp.c !== undefined) S.cell[wp.c] = S.time + wp.d + 0.05;
+        }
+        if (wp.ok) tk.ok = true;
+        tk.wi++;
+        if (tk.wi >= WP.length) { tk.el && tk.el.remove(); return false; }
+      }
+      return true;
+    });
+  }
+  function renderS() {
+    for (const tk of S.tokens) {
+      if (!tk.el) {
+        tk.el = document.createElementNS(NS, 'rect');
+        tk.el.setAttribute('class', 'token');
+        tk.el.setAttribute('width', 10); tk.el.setAttribute('height', 10);
+        tk.el.setAttribute('y', 211);
+        tokS.appendChild(tk.el);
+      }
+      tk.el.setAttribute('x', (tk.x - 5).toFixed(1));
+      tk.el.classList.toggle('ok', tk.ok);
+    }
+    litNodes.forEach(id => $(id).classList.toggle('lit', S.time < (S.lit[id] || 0)));
+    devinCells.forEach((c, i) => c.classList.toggle('on', S.time < S.cell[i]));
+  }
+
+  function fastForward(upd, render, seconds) {
+    for (let k = 0; k < seconds * 30; k++) upd(1 / 30);
+    render();
+  }
+
+  /* ---------- Benefits ---------- */
+  const solution = $('solution');
+  const benefitBtns = [...document.querySelectorAll('.benefit')];
+  let bIdx = 0, bPinned = false, bTimer = null;
+  function setBenefit(i) {
+    bIdx = i;
+    benefitBtns.forEach((b, k) => b.classList.toggle('on', k === i));
+    solution.classList.add('focus');
+    solution.querySelectorAll('.dim').forEach(el => el.classList.toggle('hl', el.dataset.b === String(i)));
+  }
+  function clearBenefit() {
+    solution.classList.remove('focus');
+    benefitBtns.forEach(b => b.classList.remove('on'));
+    solution.querySelectorAll('.dim').forEach(el => el.classList.remove('hl'));
+  }
+  function startBenefitCycle() {
+    stopBenefitCycle();
+    setBenefit(0);
+    bTimer = setInterval(() => { if (!bPinned) setBenefit((bIdx + 1) % 3); }, 2000);
+  }
+  function stopBenefitCycle() { if (bTimer) clearInterval(bTimer); bTimer = null; }
+  benefitBtns.forEach((b, k) => {
+    const pin = () => { if (cur === 2) { bPinned = true; setBenefit(k); } };
+    const unpin = () => { bPinned = false; };
+    b.addEventListener('mouseenter', pin);
+    b.addEventListener('focus', pin);
+    b.addEventListener('mouseleave', unpin);
+    b.addEventListener('blur', unpin);
+  });
+
+  /* ---------- Scene switching ---------- */
+  const tabs = [...document.querySelectorAll('.tabs button')];
+  const copy = $('copy');
+  function reveal(ids, times) {
+    ids.forEach((id, k) => {
+      const el = $(id);
+      if (reduce) { el.classList.add('shown'); return; }
+      timers.push(setTimeout(() => el.classList.add('shown'), times[k] * 1000));
+    });
+  }
+  function setScene(i) {
+    const prev = cur;
+    cur = Math.max(0, Math.min(SCENES.length - 1, i));
+    const sc = SCENES[cur];
+    timers.forEach(clearTimeout); timers = [];
+
+    tabs.forEach((t, k) => t.setAttribute('aria-selected', String(k === cur)));
+    $('problem').classList.toggle('on', sc.group === 'problem');
+    solution.classList.toggle('on', sc.group === 'solution');
+    $('stageDesc').textContent = sc.desc;
+
+    const writeCopy = () => {
+      $('headline').textContent = sc.h;
+      $('sub').textContent = sc.s;
+      $('sub').hidden = !sc.s;
+      copy.classList.remove('fade');
+    };
+    if (reduce || prev === cur) writeCopy();
+    else { copy.classList.add('fade'); timers.push(setTimeout(writeCopy, 250)); }
+
+    document.querySelectorAll('.callout').forEach(c => c.classList.remove('shown'));
+    solution.classList.toggle('quiet', cur === 2);
+    $('benefits').classList.toggle('on', cur === 2);
+
+    if (cur === 0) {
+      resetP();
+      if (reduce) fastForward(updP, renderP, 9);
+      reveal(['c1', 'c2', 'c3'], [1.6, 3.4, 5.2]);
+    } else {
+      const continuing = (prev === 1 && cur === 2) || (prev === 2 && cur === 1);
+      if (!continuing || !S) { resetS(); if (reduce) fastForward(updS, renderS, 6.3); }
+      if (cur === 1) reveal(['s1', 's2', 's3', 's4'], [0.8, 2.2, 3.6, 5.0]);
+    }
+
+    if (cur === 2) startBenefitCycle();
+    else { stopBenefitCycle(); clearBenefit(); }
+
+    if (!auto.on) $('prog').style.width = ((DUR.slice(0, cur + 1).reduce((a, b) => a + b, 0)) / TOTAL * 100) + '%';
+  }
+
+  /* ---------- Autoplay ---------- */
+  function sceneAt(t) {
+    let acc = 0;
+    for (let k = 0; k < DUR.length; k++) { acc += DUR[k]; if (t < acc) return k; }
+    return DUR.length - 1;
+  }
+  function setAuto(on) {
+    auto.on = on;
+    $('play').textContent = on ? 'Stop' : 'Play 30 s';
+    if (on) { auto.t = 0; setScene(0); }
+  }
+
+  /* ---------- Loop ---------- */
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (auto.on) {
+      auto.t += dt;
+      $('prog').style.width = Math.min(100, auto.t / TOTAL * 100) + '%';
+      const k = sceneAt(auto.t);
+      if (k !== cur) setScene(k);
+      if (auto.t >= TOTAL) { auto.on = false; $('play').textContent = 'Play 30 s'; }
+    }
+    if (!reduce) {
+      if (cur === 0) { updP(dt); renderP(); }
+      else { updS(dt); renderS(); }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /* ---------- Input ---------- */
+  tabs.forEach(t => t.addEventListener('click', () => { auto.on = false; $('play').textContent = 'Play 30 s'; setScene(+t.dataset.scene); }));
+  $('prev').addEventListener('click', () => { auto.on = false; $('play').textContent = 'Play 30 s'; setScene(cur - 1); });
+  $('next').addEventListener('click', () => { auto.on = false; $('play').textContent = 'Play 30 s'; setScene(cur + 1); });
+  $('play').addEventListener('click', () => setAuto(!auto.on));
+
+  function toggleTheme() {
+    const root = document.documentElement;
+    const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const isDark = root.dataset.theme ? root.dataset.theme === 'dark' : sysDark;
+    root.dataset.theme = isDark ? 'light' : 'dark';
+  }
+  document.addEventListener('keydown', e => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key;
+    if (k === 'ArrowRight' || k === 'PageDown') { e.preventDefault(); auto.on = false; $('play').textContent = 'Play 30 s'; setScene(cur + 1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp') { e.preventDefault(); auto.on = false; $('play').textContent = 'Play 30 s'; setScene(cur - 1); }
+    else if (k === ' ') { e.preventDefault(); setAuto(!auto.on); }
+    else if (k === 'h' || k === 'H') document.body.classList.toggle('clean');
+    else if (k === 't' || k === 'T') toggleTheme();
+    else if (k === 'r' || k === 'R') setScene(cur);
+  });
+
+  resetS();
+  setScene(0);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

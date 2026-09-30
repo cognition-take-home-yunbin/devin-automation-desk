@@ -6,6 +6,10 @@
 
 **What this repo is.** A local FastAPI + React **ops desk** that scans maintainer-approved issues on a configured fork, creates a **bounded Devin API session** per issue, tracks it through durable jobs, **independently verifies** PR checks against a versioned policy, mirrors status onto GitHub labels, publishes sanitized report facts for a native Devin Automation, and surfaces everything on a dashboard. Slack collaboration and daily digests stay on **Devin's native surfaces** — this app does not ship a custom Slack bot.
 
+## Loom Video
+
+https://www.loom.com/share/5bcdf46374304b85b8a177c9ef871165
+
 | Mode | Purpose |
 | --- | --- |
 | `APP_MODE=simulation` | Credential-free demo of the same orchestration (fake GitHub/Devin). |
@@ -106,7 +110,7 @@ flowchart LR
 | Who runs it | This worker | Devin's Slack integration | A native Devin Automation you configure once |
 | This app… | Owns it | Budgeted `message` / verification update; `slack-link` records the permalink | Publishes facts + **observes** tagged sessions; never infers Slack delivery |
 
-More detail: [`docs/architecture.md`](docs/architecture.md) · native report setup: [`docs/native-reporting.md`](docs/native-reporting.md).
+More detail: [`docs/architecture.md`](docs/architecture.md) · [architecture diagram (HTML)](docs/Repair%20Desk%20architecture.html) · native report setup: [`docs/native-reporting.md`](docs/native-reporting.md).
 
 ### State model (four dimensions)
 
@@ -405,6 +409,14 @@ Fill with **observed** links after real runs (session URLs may need org access; 
 
 ---
 
+## What's Next
+
+1. **Run a batch of 10 to 20 bugs from the backlog** and track time to a verified PR, reviewer acceptance, how much reviewers change, and cost per merged fix.
+2. **Feed every review comment and outcome back into Knowledge and the Playbook**, including checking upstream for existing fixes.
+3. **Once numbers hold**, move onto infrastructure with webhooks and parallel sessions, and extend to new bug classes like flaky tests.
+
+---
+
 ## Layout
 
 ```text
@@ -419,7 +431,3 @@ Dockerfile compose.yaml .env.example
 ```
 
 ---
-
-## Loom
-
-_Add public Loom URL here after recording (What / How / Why / When, under five minutes). Confirm the link opens signed-out and shows no secrets._

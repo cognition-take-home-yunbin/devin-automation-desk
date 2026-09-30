@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Repair Desk: architecture and three decisions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500&family=Newsreader:opsz,wght@6..72,400&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f7f6f5; --card: #fdfcfb; --ink: #000000; --muted: #5f5d5a; --rule: #d8d5d1;
+    --blue: #0294DE; --blue-tint: #e7f3fb;
+    --green: #21C19A; --green-ink: #0f7f63; --indigo: #3969CA;
+    --display: "Hanken Grotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #1a1918; --card: #232220; --ink: #f7f6f5; --muted: #a8a5a0; --rule: #3b3936;
+      --blue-tint: #10283a; --green-ink: #21C19A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #1a1918; --card: #232220; --ink: #f7f6f5; --muted: #a8a5a0; --rule: #3b3936;
+    --blue-tint: #10283a; --green-ink: #21C19A;
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+  body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: var(--serif); -webkit-font-smoothing: antialiased; }
+  .app {
+    min-height: 100%; max-width: 1360px; margin: 0 auto;
+    padding: clamp(14px, 2.5vh, 26px) clamp(16px, 3vw, 44px);
+    display: grid; grid-template-rows: auto auto auto auto 1fr auto;
+  }
+
+  .top { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px 28px; border-bottom: 1px solid var(--ink); padding-bottom: 14px; }
+  .brand { font: 500 17px/1 var(--display); }
+  .brand span { color: var(--muted); font-weight: 400; }
+  .tabs { display: flex; gap: 22px; flex-wrap: wrap; }
+  .tabs button { font: 400 15px/1 var(--display); color: var(--muted); background: none; border: 0; border-bottom: 2px solid transparent; padding: 6px 0 8px; cursor: pointer; border-radius: 0; }
+  .tabs button .n { font-variant-numeric: tabular-nums; margin-right: 7px; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .tabs button:hover { color: var(--ink); }
+
+  .copy { padding: clamp(18px, 3.5vh, 36px) 0 clamp(4px, 1vh, 10px); min-height: 8.6em; transition: opacity .3s; }
+  .copy.fade { opacity: 0; }
+  h1 { font: 400 clamp(26px, 3vw, 40px)/1.1 var(--display); letter-spacing: -0.02em; margin: 0 0 12px; max-width: 30ch; }
+  .sub { font-size: clamp(16px, 1.35vw, 19px); line-height: 1.5; color: var(--muted); max-width: 66ch; margin: 0; }
+
+  .stage-wrap { overflow-x: auto; overflow-y: hidden; }
+  #stage { display: block; width: 100%; min-width: 960px; height: auto; }
+  #stage text { font-family: var(--display); }
+  #stage .code { font-family: var(--mono) !important; }
+
+  .el { transition: opacity .35s; }
+  .el.dim { opacity: .16; }
+
+  .node .body { fill: var(--card); stroke: var(--ink); stroke-width: 1.25; transition: stroke-width .2s; }
+  .node.lit .body { stroke-width: 3; }
+  .node .t { font-size: 16px; fill: var(--ink); }
+  .node .c { font-size: 12px; fill: var(--muted); }
+  .node .c.s { font-size: 11px; }
+  .node .h { font-size: 13px; fill: var(--muted); }
+  .node.devin .body { fill: var(--blue-tint); stroke: var(--blue); stroke-width: 1.5; }
+  .node.devin.lit .body { stroke-width: 3.5; }
+  .node.verify .body { stroke: var(--green); stroke-width: 1.5; }
+  .node.verify.lit .body { stroke-width: 3.5; }
+  .node.done .body { stroke: var(--green); stroke-width: 1.5; }
+  .node.done.lit .body { stroke-width: 3.5; }
+  .node.store .body { stroke: var(--indigo); stroke-width: 1.5; }
+  .node.store.lit .body { stroke-width: 3.5; }
+
+  .wire { stroke: var(--ink); stroke-width: 1.25; fill: none; transition: stroke .2s; }
+  .wire.dash { stroke-dasharray: 3 5; stroke: var(--muted); }
+  .wire.broken { stroke-dasharray: 4 5; stroke: var(--muted); }
+  .arrow { fill: var(--ink); }
+  .elbl { font-size: 12.5px; fill: var(--muted); text-anchor: middle; }
+  .rowlbl { font-size: 14px; fill: var(--muted); }
+
+  .flag { font-size: 14px; fill: var(--ink); opacity: 0; transition: opacity .35s; }
+  .flag.shown { opacity: 1; }
+  .flag.ok { fill: var(--green-ink); }
+
+  .token { fill: var(--ink); stroke: var(--paper); stroke-width: 1.5; }
+  .token.ok { fill: var(--green); }
+  .token.dup { fill: var(--paper); stroke: var(--ink); stroke-width: 1.5; }
+  .token.wait { fill: var(--paper); stroke: var(--ink); stroke-width: 2; animation: blink .5s ease-in-out infinite alternate; }
+  @keyframes blink { to { opacity: .25; } }
+
+  /* Detail strip */
+  .detail { display: grid; gap: clamp(14px, 2.4vw, 36px); padding-top: clamp(10px, 2vh, 20px); min-height: 7.5em; transition: opacity .3s; }
+  .detail.fade { opacity: 0; }
+  .di { border-top: 1px solid var(--ink); padding-top: 12px; font: 400 clamp(15px, 1.2vw, 17px)/1.45 var(--serif); transition: opacity .3s, border-top-width .2s, padding-top .2s; }
+  .di.off { opacity: .35; }
+  .di.on { border-top-width: 3px; padding-top: 10px; }
+  .di .k { display: block; font: 400 15px/1.2 var(--display); color: var(--muted); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+  .di code { font: 400 .88em var(--mono); }
+  button.di { all: unset; display: block; cursor: pointer; border-top: 1px solid var(--ink); padding-top: 12px; font: 400 clamp(17px, 1.4vw, 20px)/1.3 var(--display); }
+  button.di:hover { border-top-width: 3px; padding-top: 10px; }
+  .chk { position: relative; padding-left: 30px; }
+  .chk::before { content: ""; position: absolute; left: 0; top: 16px; width: 18px; height: 18px; border: 1.5px solid var(--ink); }
+  .chk.done::before { background: var(--green); border-color: var(--green); }
+  .chk.done::after { content: ""; position: absolute; left: 6px; top: 18px; width: 5px; height: 10px; border: solid #000; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  .state .v { display: block; font: 400 clamp(20px, 1.8vw, 26px)/1.2 var(--display); letter-spacing: -0.01em; transition: color .3s; }
+  .state .v.good { color: var(--green-ink); }
+  .state .v.wait { color: var(--muted); }
+  .result { grid-column: 1 / -1; font: 400 16px/1.4 var(--display); color: var(--green-ink); opacity: 0; transition: opacity .35s; }
+  .result.shown { opacity: 1; }
+
+  .controls { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; border-top: 1px solid var(--rule); margin-top: clamp(14px, 2.5vh, 24px); padding-top: 12px; font: 400 13px/1 var(--display); color: var(--muted); }
+  body.clean .controls { visibility: hidden; }
+  .btn { font: 400 14px/1 var(--display); color: var(--ink); background: transparent; border: 1px solid var(--ink); border-radius: 0; padding: 8px 14px; cursor: pointer; }
+  .btn:hover { background: var(--ink); color: var(--paper); }
+  .progress { flex: 1 1 160px; height: 2px; background: var(--rule); position: relative; min-width: 120px; }
+  .progress i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--ink); }
+  .hint { display: flex; gap: 14px; flex-wrap: wrap; }
+  kbd { font: 400 12px/1 var(--display); border: 1px solid var(--rule); padding: 3px 6px; margin-right: 4px; color: var(--ink); }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+  @media (max-width: 760px) {
+    .detail { grid-template-columns: 1fr !important; }
+    .copy { min-height: 0; }
+    .hint { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .el, .flag, .copy, .detail, .di, .node .body, .result { transition: none !important; }
+    .token.wait { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">Repair Desk <span>architecture</span></div>
+    <nav class="tabs" role="tablist" aria-label="Walkthrough">
+      <button role="tab" data-scene="0"><span class="n">1</span>Overview</button>
+      <button role="tab" data-scene="1"><span class="n">2</span>Intake</button>
+      <button role="tab" data-scene="2"><span class="n">3</span>Launch</button>
+      <button role="tab" data-scene="3"><span class="n">4</span>Verify</button>
+      <button role="tab" data-scene="4"><span class="n">5</span>States</button>
+    </nav>
+  </header>
+
+  <section class="copy" id="copy" aria-live="polite">
+    <h1 id="headline"></h1>
+    <p class="sub" id="sub"></p>
+  </section>
+
+  <div class="stage-wrap">
+    <svg id="stage" viewBox="0 0 1280 412" role="img" aria-labelledby="stTitle stDesc">
+      <title id="stTitle">Repair Desk architecture</title>
+      <desc id="stDesc"></desc>
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path class="arrow" d="M0 0 L10 5 L0 10 z"/>
+        </marker>
+      </defs>
+
+      <!-- Top row -->
+      <g class="el node" data-id="DASH">
+        <rect class="body" x="310" y="40" width="150" height="56"/>
+        <text class="t" x="324" y="64">Dashboard</text>
+        <text class="h" x="324" y="83">React UI and CLI</text>
+      </g>
+      <line class="el wire" data-id="w-DASH" x1="385" y1="96" x2="385" y2="166" marker-end="url(#arr)"/>
+
+      <g class="el node" data-id="T">
+        <rect class="body" x="794" y="40" width="128" height="56"/>
+        <text class="t" x="808" y="64">Transition</text>
+        <text class="c s code" x="808" y="83">transition_task</text>
+      </g>
+      <line class="el wire" data-id="w-TY" x1="922" y1="68" x2="942" y2="68" marker-end="url(#arr)"/>
+      <g class="el node" data-id="Y">
+        <rect class="body" x="944" y="40" width="176" height="56"/>
+        <text class="t" x="958" y="64">Status labels</text>
+        <text class="c s code" x="958" y="83">sync_status_label</text>
+      </g>
+      <text class="el elbl code" data-id="lbl-Y" id="syncLbl" x="1134" y="72" style="text-anchor:start">devin-* on GitHub</text>
+      <line class="el wire dash" data-id="w-TF" x1="858" y1="96" x2="858" y2="168"/>
+      <text class="el elbl" data-id="lbl-TF" x="866" y="140" style="text-anchor:start">on every state change</text>
+
+      <!-- Main row wires -->
+      <line class="el wire" data-id="w-AB" x1="138" y1="238" x2="158" y2="238" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-BC" x1="288" y1="238" x2="308" y2="238" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-CD" x1="460" y1="238" x2="480" y2="238" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-DE" id="wDE" x1="610" y1="238" x2="630" y2="238" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-EF" x1="772" y1="238" x2="792" y2="238" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-FG" x1="922" y1="238" x2="942" y2="238" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-GH" x1="1072" y1="238" x2="1092" y2="238" marker-end="url(#arr)"/>
+
+      <text class="el elbl" data-id="lbl-BC" x="299" y="274">allowlisted actor, snapshot frozen</text>
+      <text class="el elbl" data-id="lbl-DE" x="621" y="274">reserve ACU + correlation tag</text>
+      <text class="el elbl" data-id="lbl-FG" x="933" y="274">PR</text>
+      <text class="el elbl" data-id="lbl-GH" x="1083" y="274">policy green</text>
+
+      <!-- Main row nodes -->
+      <g class="el node" data-id="A">
+        <rect class="body" x="10" y="170" width="128" height="80"/>
+        <text class="t" x="24" y="196">Fork issues</text>
+        <text class="c code" x="24" y="216">devin-approved</text>
+      </g>
+      <g class="el node" data-id="B">
+        <rect class="body" x="160" y="170" width="128" height="80"/>
+        <text class="t" x="174" y="196">Scan</text>
+        <text class="c code" x="174" y="216">scan_issues</text>
+      </g>
+      <g class="el node store" data-id="C">
+        <path class="body" d="M310 182 V238 A75 12 0 0 0 460 238 V182 A75 12 0 0 0 310 182 Z"/>
+        <path class="body" d="M310 182 A75 12 0 0 0 460 182" style="fill:none"/>
+        <text class="t" x="324" y="210">Tasks</text>
+        <text class="h" x="324" y="228">+ approval receipts</text>
+      </g>
+      <g class="el node" data-id="D">
+        <rect class="body" x="482" y="170" width="128" height="80"/>
+        <text class="t" x="496" y="196">Dispatch</text>
+        <text class="c code" x="496" y="216">dispatch_task</text>
+      </g>
+      <g class="el node devin" data-id="E">
+        <rect class="body" x="632" y="170" width="140" height="80"/>
+        <text class="t" x="646" y="196">Devin session</text>
+        <text class="c code" x="646" y="216">create_session</text>
+      </g>
+      <g class="el node" data-id="F">
+        <rect class="body" x="794" y="170" width="128" height="80"/>
+        <text class="t" x="808" y="196">Poll</text>
+        <text class="c code" x="808" y="216">poll_session</text>
+      </g>
+      <g class="el node verify" data-id="G">
+        <rect class="body" x="944" y="170" width="128" height="80"/>
+        <text class="t" x="958" y="196">Verify</text>
+        <text class="c code" x="958" y="216">verify_task</text>
+      </g>
+      <g class="el node done" data-id="H">
+        <rect class="body" x="1094" y="170" width="176" height="80"/>
+        <text class="t" x="1108" y="194">Delivered</text>
+        <text class="c s code" x="1108" y="213">validation=verified</text>
+        <text class="c s code" x="1108" y="229">disposition=delivered</text>
+      </g>
+
+      <!-- Bottom row -->
+      <text class="el rowlbl" data-id="lbl-row" x="10" y="366">After delivery</text>
+      <path class="el wire" data-id="w-HP" d="M1152 250 V296 H1019 V322" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-HV" x1="1195" y1="250" x2="1195" y2="322" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-PR" x1="944" y1="384" x2="926" y2="384" marker-end="url(#arr)"/>
+      <line class="el wire" data-id="w-RS" x1="764" y1="384" x2="746" y2="384" marker-end="url(#arr)"/>
+
+      <g class="el node" data-id="S">
+        <rect class="body" x="564" y="324" width="180" height="76"/>
+        <text class="t" x="578" y="350">Slack digest</text>
+        <text class="h" x="578" y="369">native Devin Automation</text>
+      </g>
+      <g class="el node" data-id="R">
+        <rect class="body" x="764" y="324" width="160" height="76"/>
+        <text class="t" x="778" y="350">Report issue</text>
+        <text class="h" x="778" y="369">report-source, fixed</text>
+      </g>
+      <g class="el node" data-id="P">
+        <rect class="body" x="944" y="324" width="150" height="76"/>
+        <text class="t" x="958" y="350">Report</text>
+        <text class="c code" x="958" y="369">publish_report</text>
+      </g>
+      <g class="el node" data-id="VU">
+        <rect class="body" x="1120" y="324" width="150" height="76"/>
+        <text class="t" x="1134" y="350">PR update</text>
+        <text class="c s code" x="1134" y="369">verification_update</text>
+      </g>
+
+      <!-- Scene flags -->
+      <text class="flag" id="fDup" x="310" y="306">Same issue again: already queued, skipped</text>
+      <text class="flag" id="fD" x="482" y="140">ACU reserved, tag saved</text>
+      <text class="flag" id="fE" x="632" y="162"></text>
+      <text class="flag" id="fF" x="794" y="306">Devin's report is testimony</text>
+
+      <g id="tokens"></g>
+    </svg>
+  </div>
+
+  <section class="detail" id="detail" aria-live="polite"></section>
+
+  <footer class="controls">
+    <button class="btn" id="prev">Back</button>
+    <button class="btn" id="play">Play 55 s</button>
+    <button class="btn" id="next">Next</button>
+    <div class="progress" aria-hidden="true"><i id="prog"></i></div>
+    <div class="hint">
+      <span><kbd>←</kbd><kbd>→</kbd>step</span>
+      <span><kbd>1</kbd>–<kbd>5</kbd>jump</span>
+      <span><kbd>Space</kbd>play</span>
+      <span><kbd>H</kbd>hide controls</span>
+      <span><kbd>T</kbd>theme</span>
+    </div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const $ = id => document.getElementById(id);
+  const els = [...document.querySelectorAll('#stage .el')];
+  const nodeById = {};
+  document.querySelectorAll('#stage .node').forEach(n => nodeById[n.dataset.id] = n);
+  const tokG = $('tokens');
+  const detail = $('detail');
+
+  /* ---------- Token engine ---------- */
+  const G = { time: 0, tokens: [], lit: {} };
+  const light = (id, d) => { G.lit[id] = Math.max(G.lit[id] || 0, G.time + d); };
+  function spawn(pts, cls = '', speed = 260) {
+    const tk = { x: pts[0].x, y: pts[0].y, pts, i: 0, dwell: 0, cls, speed, done: false };
+    G.tokens.push(tk);
+    return tk;
+  }
+  function clearTokens() { G.tokens.forEach(t => t.el && t.el.remove()); G.tokens = []; }
+  function update(dt) {
+    G.time += dt;
+    G.tokens = G.tokens.filter(tk => {
+      if (tk.dwell > 0) { tk.dwell -= dt; return true; }
+      if (tk.done) { tk.el && tk.el.remove(); return false; }
+      const p = tk.pts[tk.i];
+      const dx = p.x - tk.x, dy = p.y - tk.y, dist = Math.hypot(dx, dy), step = tk.speed * dt;
+      if (dist <= step) {
+        tk.x = p.x; tk.y = p.y;
+        if (p.lit) light(p.lit, (p.d || 0) + 0.15);
+        if (p.cls !== undefined) tk.cls = p.cls;
+        if (p.ev) p.ev(tk);
+        tk.dwell = p.d || 0;
+        tk.i++;
+        if (tk.i >= tk.pts.length) tk.done = true;
+      } else { tk.x += dx / dist * step; tk.y += dy / dist * step; }
+      return true;
+    });
+  }
+  function render() {
+    for (const tk of G.tokens) {
+      if (!tk.el) {
+        tk.el = document.createElementNS(NS, 'rect');
+        tk.el.setAttribute('width', 10); tk.el.setAttribute('height', 10);
+        tokG.appendChild(tk.el);
+      }
+      tk.el.setAttribute('x', (tk.x - 5).toFixed(1));
+      tk.el.setAttribute('y', (tk.y - 5).toFixed(1));
+      tk.el.setAttribute('class', 'token ' + tk.cls);
+    }
+    for (const id in nodeById) nodeById[id].classList.toggle('lit', G.time < (G.lit[id] || 0));
+  }
+
+  /* ---------- Shared helpers ---------- */
+  const Y = 238, YB = 384;
+  const MAIN = [
+    { x: 74, y: Y },
+    { x: 224, y: Y, d: .25, lit: 'B' },
+    { x: 385, y: Y, d: .3, lit: 'C' },
+    { x: 546, y: Y, d: .25, lit: 'D' },
+    { x: 702, y: Y, d: .5, lit: 'E' },
+    { x: 858, y: Y, d: .25, lit: 'F' },
+    { x: 1008, y: Y, d: .35, lit: 'G', cls: 'ok' },
+    { x: 1182, y: Y, d: .3, lit: 'H', ev: () => spawn([{ x: 1195, y: 250 }, { x: 1195, y: YB, d: .4, lit: 'VU' }], 'ok') }
+  ];
+  const TAIL = [
+    { x: 1152, y: Y }, { x: 1152, y: 296 }, { x: 1019, y: 296 },
+    { x: 1019, y: YB, d: .35, lit: 'P' },
+    { x: 844, y: YB, d: .35, lit: 'R' },
+    { x: 654, y: YB, d: .5, lit: 'S' }
+  ];
+  const flag = (id, on, text) => { const f = $(id); if (text !== undefined) f.textContent = text; f.classList.toggle('shown', on); };
+  const q = sel => [...detail.querySelectorAll(sel)];
+  const setOn = (sel, i) => q(sel).forEach((e, k) => { e.classList.toggle('on', k === i); e.classList.toggle('off', k !== i && i >= 0); });
+
+  /* ---------- Scenes ---------- */
+  const SCENES = [
+    {
+      h: 'The system is deliberately small.',
+      s: 'A FastAPI service with one background worker, a React dashboard and CLI, and SQLite holding the queue and every state. Docker Compose runs it.',
+      desc: 'Pipeline: fork issues are scanned, approvals become tasks, dispatch starts a Devin session, the session is polled, the pull request is verified and delivered, then reported.',
+      hl: null, period: 5.2, clearOnLoop: false,
+      detail: () => {
+        detail.style.gridTemplateColumns = 'repeat(3, 1fr)';
+        detail.innerHTML = `
+          <button class="di" data-go="1"><span class="k">1</span>Approval and execution are separate</button>
+          <button class="di" data-go="2"><span class="k">2</span>Session creation can fail ambiguously</button>
+          <button class="di" data-go="3"><span class="k">3</span>We don't take Devin's word for it</button>`;
+        q('[data-go]').forEach(b => b.addEventListener('click', () => { stopAuto(); setScene(+b.dataset.go); }));
+      },
+      events: [[0, () => spawn([...MAIN, ...TAIL])], [2.6, () => spawn([...MAIN, ...TAIL])]],
+      reset: () => {}, final: () => {}
+    },
+    {
+      h: 'Approval and execution are separate.',
+      s: 'Each approval becomes a task keyed to the issue, so a repeat scan never pays for a second repair.',
+      desc: 'Decision one: an approved issue is scanned and saved as a task with an approval receipt. A second scan of the same issue finds the existing task and is skipped.',
+      hl: ['A', 'B', 'C', 'D', 'DASH', 'w-AB', 'w-BC', 'w-CD', 'w-DASH', 'lbl-BC'],
+      period: 7.5, clearOnLoop: true,
+      detail: () => {
+        detail.style.gridTemplateColumns = 'repeat(3, 1fr)';
+        detail.innerHTML = `
+          <div class="di"><span class="k">Who approved</span>Only a label event from an allowlisted maintainer counts, and the issue also needs <code>devin-candidate</code>.</div>
+          <div class="di"><span class="k">What was approved</span>The issue is frozen as a snapshot, with an approval receipt, before anything runs.</div>
+          <div class="di"><span class="k">Only once</span>One task per repo and issue. A repeat scan finds it instead of starting another repair.</div>`;
+      },
+      events: [
+        [0, () => spawn([{ x: 74, y: Y }, { x: 224, y: Y, d: .4, lit: 'B' }, { x: 385, y: Y, d: .7, lit: 'C' }, { x: 546, y: Y, d: .6, lit: 'D' }])],
+        [2.6, () => spawn([{ x: 74, y: Y }, { x: 224, y: Y, d: .4, lit: 'B' },
+          { x: 372, y: Y, d: 1.2, lit: 'C', ev: tk => { tk.cls = 'dup'; flag('fDup', true); } }], 'dup')]
+      ],
+      reset: () => flag('fDup', false),
+      final: () => flag('fDup', true)
+    },
+    {
+      h: 'Session creation can fail ambiguously.',
+      s: 'We save a correlation tag before the call. On a timeout we search Devin for that tag instead of retrying, so there are no duplicate paid sessions.',
+      desc: 'Decision two: dispatch reserves ACU budget and saves a correlation tag, calls create_session, and on a timeout searches for the tag rather than retrying.',
+      hl: ['D', 'E', 'w-DE', 'lbl-DE'],
+      period: 7.5, clearOnLoop: true,
+      detail: () => {
+        detail.style.gridTemplateColumns = 'repeat(4, 1fr)';
+        detail.innerHTML = `
+          <div class="di step"><span class="k">1</span>Reserve the ACU budget</div>
+          <div class="di step"><span class="k">2</span>Save a correlation tag</div>
+          <div class="di step"><span class="k">3</span>Call <code>create_session</code></div>
+          <div class="di step"><span class="k">4</span>On a timeout, find the session by its tag. Never retry blind.</div>`;
+      },
+      events: [
+        [0, () => {
+          flag('fD', true); setOn('.step', 0);
+          spawn([{ x: 546, y: Y, d: .9, lit: 'D' }, { x: 621, y: Y, d: 2.2, cls: 'wait' }, { x: 702, y: Y, d: .7, cls: '' }, { x: 858, y: Y, d: .4, lit: 'F' }]);
+        }],
+        [.6, () => setOn('.step', 1)],
+        [1.2, () => { setOn('.step', 2); flag('fE', true, 'Calling create_session…'); }],
+        [1.9, () => { $('wDE').classList.add('broken'); flag('fE', true, 'Timed out. Did a session start?'); }],
+        [2.7, () => { setOn('.step', 3); light('E', 1.2); flag('fE', true, 'Searching Devin for the tag…'); }],
+        [3.4, () => { $('wDE').classList.remove('broken'); light('E', .8); flag('fE', true, 'Found it. One session, no retry.'); }]
+      ],
+      reset: () => { flag('fD', false); flag('fE', false); $('wDE').classList.remove('broken'); setOn('.step', -1); q('.step').forEach(e => e.classList.remove('off', 'on')); },
+      final: () => { flag('fD', true); flag('fE', true, 'Found it. One session, no retry.'); setOn('.step', 3); }
+    },
+    {
+      h: "We don't take Devin's word for it.",
+      s: 'The verifier fetches the pull request itself. Missing, failed or stale checks never count as verified.',
+      desc: 'Decision three: the verifier checks repo and base branch, required checks on the current head commit, trusted workflow provenance, and re-fetches the head so a stale result never counts.',
+      hl: ['F', 'G', 'H', 'w-FG', 'w-GH', 'lbl-FG', 'lbl-GH'],
+      period: 8, clearOnLoop: true,
+      detail: () => {
+        detail.style.gridTemplateColumns = 'repeat(4, 1fr)';
+        detail.innerHTML = `
+          <div class="di chk">Targets the configured repo and base branch</div>
+          <div class="di chk">Required checks green on the current head commit</div>
+          <div class="di chk">Checks come from the trusted workflow</div>
+          <div class="di chk">Head re-fetched, so a stale green never counts</div>
+          <div class="result" id="res">Result: validation = verified</div>`;
+      },
+      events: [
+        [0, () => { flag('fF', true); spawn([{ x: 858, y: Y, d: .9, lit: 'F' }, { x: 1008, y: Y, d: 3.1, lit: 'G' }, { x: 1182, y: Y, d: 1.2, lit: 'H' }]); }],
+        [1.9, () => q('.chk')[0].classList.add('done')],
+        [2.5, () => q('.chk')[1].classList.add('done')],
+        [3.1, () => q('.chk')[2].classList.add('done')],
+        [3.7, () => q('.chk')[3].classList.add('done')],
+        [4.3, () => { G.tokens.forEach(t => t.cls = 'ok'); $('res').classList.add('shown'); }]
+      ],
+      reset: () => { flag('fF', false); q('.chk').forEach(c => c.classList.remove('done')); const r = $('res'); r && r.classList.remove('shown'); },
+      final: () => { flag('fF', true); q('.chk').forEach(c => c.classList.add('done')); $('res').classList.add('shown'); }
+    },
+    {
+      h: 'Four states, tracked separately.',
+      s: "Devin finishing, checks passing, a reviewer approving and the final outcome are different facts, so none can hide behind one green status.",
+      desc: 'The dashboard tracks execution, validation, review and disposition separately. State changes are mirrored to GitHub labels, and delivered work is reported to a Slack digest.',
+      hl: ['H', 'T', 'Y', 'w-TY', 'w-TF', 'lbl-TF', 'lbl-Y', 'DASH', 'w-HP', 'w-HV', 'w-PR', 'w-RS', 'P', 'R', 'S', 'VU', 'lbl-row'],
+      period: 8, clearOnLoop: true,
+      detail: () => {
+        detail.style.gridTemplateColumns = 'repeat(4, 1fr)';
+        detail.innerHTML = `
+          <div class="di state"><span class="k">Execution</span><span class="v" id="vX"></span></div>
+          <div class="di state"><span class="k">Validation</span><span class="v" id="vV"></span></div>
+          <div class="di state"><span class="k">Review</span><span class="v" id="vR"></span></div>
+          <div class="di state"><span class="k">Disposition</span><span class="v" id="vD"></span></div>`;
+      },
+      events: [
+        [0, () => { sv('vX', 'running', 'wait'); sv('vV', 'pending', 'wait'); sv('vR', 'not requested', 'wait'); sv('vD', 'open', 'wait'); lbl('devin-in-progress'); }],
+        [1.2, () => { sv('vX', 'agent finished', ''); sv('vR', 'awaiting reviewer', 'wait'); lbl('devin-pr-opened'); }],
+        [2.4, () => { sv('vV', 'verified', 'good'); }],
+        [3.2, () => { sv('vD', 'delivered', 'good'); lbl('devin-succeeded');
+          spawn([{ x: 1182, y: Y, d: .4, lit: 'H', ev: () => spawn([{ x: 1195, y: 250 }, { x: 1195, y: YB, d: .5, lit: 'VU' }], 'ok') }, ...TAIL], 'ok'); }]
+      ],
+      reset: () => { $('syncLbl').textContent = 'devin-* on GitHub'; },
+      final: () => { sv('vX', 'agent finished', ''); sv('vV', 'verified', 'good'); sv('vR', 'awaiting reviewer', 'wait'); sv('vD', 'delivered', 'good'); $('syncLbl').textContent = 'devin-succeeded'; }
+    }
+  ];
+  function sv(id, text, cls) { const e = $(id); if (!e) return; e.textContent = text; e.className = 'v ' + cls; }
+  function lbl(t) { $('syncLbl').textContent = t; light('T', .6); light('Y', .9); }
+
+  /* ---------- Scene control ---------- */
+  const DUR = [8, 12, 13, 14, 8];
+  const TOTAL = DUR.reduce((a, b) => a + b, 0);
+  const tabs = [...document.querySelectorAll('.tabs button')];
+  let cur = -1, sT = 0, fired = 0;
+  const auto = { on: false, t: 0 };
+
+  function applyFocus(hl) {
+    els.forEach(e => e.classList.toggle('dim', !!hl && !hl.includes(e.dataset.id)));
+  }
+  function setScene(i) {
+    const prev = cur;
+    cur = Math.max(0, Math.min(SCENES.length - 1, i));
+    const sc = SCENES[cur];
+    if (prev >= 0) SCENES[prev].reset();
+    ['fDup', 'fD', 'fE', 'fF'].forEach(f => flag(f, false));
+    $('wDE').classList.remove('broken');
+    $('syncLbl').textContent = 'devin-* on GitHub';
+    clearTokens(); G.lit = {};
+    tabs.forEach((t, k) => t.setAttribute('aria-selected', String(k === cur)));
+    applyFocus(sc.hl);
+    $('stDesc').textContent = sc.desc;
+
+    const write = () => {
+      $('headline').textContent = sc.h; $('sub').textContent = sc.s;
+      sc.detail();
+      $('copy').classList.remove('fade'); detail.classList.remove('fade');
+      if (reduce) { sc.events.forEach(([, fn]) => fn()); clearTokens(); sc.final(); render(); }
+    };
+    if (reduce || prev === -1 || prev === cur) write();
+    else { $('copy').classList.add('fade'); detail.classList.add('fade'); setTimeout(write, 220); }
+
+    sT = 0; fired = 0;
+    if (!auto.on) $('prog').style.width = (DUR.slice(0, cur + 1).reduce((a, b) => a + b, 0) / TOTAL * 100) + '%';
+  }
+  function tickScene(dt) {
+    const sc = SCENES[cur];
+    sT += dt;
+    while (fired < sc.events.length && sT >= sc.events[fired][0]) { sc.events[fired][1](); fired++; }
+    if (sT >= sc.period) {
+      sT = 0; fired = 0;
+      sc.reset();
+      if (sc.clearOnLoop) { clearTokens(); ['fDup', 'fD', 'fE', 'fF'].forEach(f => flag(f, false)); }
+      if (sc.detail && sc.clearOnLoop) sc.detail();
+    }
+  }
+
+  function sceneAt(t) { let a = 0; for (let k = 0; k < DUR.length; k++) { a += DUR[k]; if (t < a) return k; } return DUR.length - 1; }
+  function stopAuto() { auto.on = false; $('play').textContent = 'Play 55 s'; }
+  function toggleAuto() {
+    if (auto.on) { stopAuto(); return; }
+    auto.on = true; auto.t = 0; $('play').textContent = 'Stop'; setScene(0);
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (auto.on) {
+      auto.t += dt;
+      $('prog').style.width = Math.min(100, auto.t / TOTAL * 100) + '%';
+      const k = sceneAt(auto.t);
+      if (k !== cur) setScene(k);
+      if (auto.t >= TOTAL) stopAuto();
+    }
+    if (!reduce && !$('copy').classList.contains('fade')) { tickScene(dt); update(dt); render(); }
+    requestAnimationFrame(frame);
+  }
+
+  tabs.forEach(t => t.addEventListener('click', () => { stopAuto(); setScene(+t.dataset.scene); }));
+  $('prev').addEventListener('click', () => { stopAuto(); setScene(cur - 1); });
+  $('next').addEventListener('click', () => { stopAuto(); setScene(cur + 1); });
+  $('play').addEventListener('click', toggleAuto);
+  function toggleTheme() {
+    const r = document.documentElement;
+    const sys = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const dark = r.dataset.theme ? r.dataset.theme === 'dark' : sys;
+    r.dataset.theme = dark ? 'light' : 'dark';
+  }
+  document.addEventListener('keydown', e => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key;
+    if (k === 'ArrowRight' || k === 'PageDown') { e.preventDefault(); stopAuto(); setScene(cur + 1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp') { e.preventDefault(); stopAuto(); setScene(cur - 1); }
+    else if (k >= '1' && k <= '5') { stopAuto(); setScene(+k - 1); }
+    else if (k === ' ') { e.preventDefault(); toggleAuto(); }
+    else if (k === 'h' || k === 'H') document.body.classList.toggle('clean');
+    else if (k === 't' || k === 'T') toggleTheme();
+    else if (k === 'r' || k === 'R') { const c = cur; cur = -1; setScene(c); }
+  });
+
+  setScene(0);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
