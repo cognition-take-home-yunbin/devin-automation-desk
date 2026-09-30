@@ -81,12 +81,10 @@ def handle_send_message(ctx: ServiceContext, job: sqlite3.Row) -> None:
             title=f"Operator message to {session_id}",
             body={"text": text}, synthetic=task["synthetic"] == 1,
         )
-        # The session may now be working again — make sure a poll is queued.
-        jobs.enqueue(
-            conn, "poll_session",
-            {"task_id": task["id"], "session_id": session_id},
+        # The session may now be working again — make sure a poll is armed.
+        jobs.enqueue_session_poll(
+            conn, task_id=task["id"], session_id=session_id,
             mode=ctx.mode, delay=ctx.settings.poll_interval_seconds,
-            dedup_key=f"poll:{session_id}",
             max_attempts=ctx.settings.job_max_attempts * 10,
         )
 
@@ -299,11 +297,9 @@ def handle_reconcile_task(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 action="creation_reconciled",
                 detail=f"operator reconcile found {session.session_id}",
             )
-        jobs.enqueue(
-            conn, "poll_session",
-            {"task_id": task["id"], "session_id": session.session_id},
+        jobs.enqueue_session_poll(
+            conn, task_id=task["id"], session_id=session.session_id,
             mode=ctx.mode, delay=ctx.settings.poll_interval_seconds,
-            dedup_key=f"poll:{session.session_id}",
             max_attempts=ctx.settings.job_max_attempts * 10,
         )
 
@@ -399,10 +395,8 @@ def handle_verification_update(ctx: ServiceContext, job: sqlite3.Row) -> None:
         audit(conn, action="vu_sent", mode=ctx.mode, task_id=task["id"],
               detail=f"verification update sent to {session_id} "
                      f"(head {head_sha[:12]})")
-        jobs.enqueue(
-            conn, "poll_session",
-            {"task_id": task["id"], "session_id": session_id},
+        jobs.enqueue_session_poll(
+            conn, task_id=task["id"], session_id=session_id,
             mode=ctx.mode, delay=ctx.settings.poll_interval_seconds,
-            dedup_key=f"poll:{session_id}",
             max_attempts=ctx.settings.job_max_attempts * 10,
         )

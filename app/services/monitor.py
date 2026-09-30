@@ -180,12 +180,20 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
         _queue_acu_refresh(conn, ctx.mode, task["id"], attempt_id,
                            session.session_id)
         if session.pr_url:
-            conn.execute(
-                """UPDATE tasks SET pr_number = ?, pr_url = ?, head_sha = ?,
-                   updated_at = ? WHERE id = ?""",
-                (session.pr_number, session.pr_url, session.pr_head_sha,
-                 db.now(), task["id"]),
-            )
+            # Seed the PR fields from the agent's claim — but only before
+            # verification. Once verified, task.head_sha is the
+            # independently observed remote head; the session's stale
+            # claimed head (it reports what it pushed, which verification
+            # may have advanced past) must not write back over it. A
+            # resumed session's genuinely-new head is picked up by the
+            # watcher's remote read instead.
+            if task["validation"] not in ("verified", "manually_verified"):
+                conn.execute(
+                    """UPDATE tasks SET pr_number = ?, pr_url = ?,
+                       head_sha = ?, updated_at = ? WHERE id = ?""",
+                    (session.pr_number, session.pr_url, session.pr_head_sha,
+                     db.now(), task["id"]),
+                )
         task = get_task(conn, task["id"])
         finish_detail = (
             "suspended session produced a PR"
@@ -197,19 +205,55 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
                         detail=finish_detail)
         # Handoff policy: keep the session available — the planned native
         # Slack conversation and the verification update still need it.
-        conn.execute(
+        # A resumed session can finish more than once — only the first
+        # finish writes the cleanup record.
+        cur = conn.execute(
             "UPDATE tasks SET cleanup_state = 'kept', updated_at = ? "
             "WHERE id = ? AND cleanup_state = 'pending'",
             (db.now(), task["id"]),
         )
-        _record_cleanup(
-            conn, task, "kept", actor="system",
-            session_id=session.session_id,
-            detail="retained for native conversation + verification update",
-        )
+        if cur.rowcount:
+            _record_cleanup(
+                conn, task, "kept", actor="system",
+                session_id=session.session_id,
+                detail="retained for native conversation + verification "
+                       "update",
+            )
         if session.pr_number:
-            transition_task(conn, task, "validation", "pr_found",
-                            detail=f"PR #{session.pr_number}")
+            if task["validation"] in ("no_pr", "pr_found"):
+                transition_task(conn, task, "validation", "pr_found",
+                                detail=f"PR #{session.pr_number}")
+            elif (
+                task["pr_number"] == session.pr_number
+                or task["validation"] != "verified"
+            ):
+                # A resumed session finished again carrying the same PR —
+                # the new head is re-verified below via the head-scoped key.
+                add_evidence(
+                    conn, task_id=task["id"], attempt_id=attempt_id,
+                    mode=ctx.mode, kind="note",
+                    title="Resumed session finished again",
+                    body={"validation": task["validation"],
+                          "pr_number": session.pr_number,
+                          "head_sha": session.pr_head_sha},
+                    synthetic=task["synthetic"] == 1,
+                )
+            else:
+                # A second, different PR after verification — the first one
+                # stays canonical; the extra work is evidence, not a state
+                # change (multiple PRs are not modelled).
+                add_evidence(
+                    conn, task_id=task["id"], attempt_id=attempt_id,
+                    mode=ctx.mode, kind="flag",
+                    title=f"Additional PR opened after verification: "
+                          f"{session.pr_url}",
+                    body={"pr_number": session.pr_number,
+                          "pr_url": session.pr_url,
+                          "canonical_pr": task["pr_number"]},
+                    uri=session.pr_url,
+                    synthetic=task["synthetic"] == 1,
+                    verifier="agent",
+                )
             add_evidence(
                 conn, task_id=task["id"], attempt_id=attempt_id,
                 mode=ctx.mode, kind="artifact",
@@ -229,13 +273,32 @@ def handle_poll(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 {"task_id": task["id"], "pr_number": session.pr_number,
                  "head_sha": session.pr_head_sha, "verify_attempt": 0},
                 mode=ctx.mode,
-                dedup_key=f"verify:{ctx.mode}:{task['id']}:{session.pr_number}",
+                # Head-scoped: re-pushes after verification must re-verify;
+                # a static key would dedup the re-run away forever.
+                dedup_key=(
+                    f"verify:{ctx.mode}:{task['id']}:{session.pr_number}:"
+                    f"{session.pr_head_sha or 'unknown'}"
+                ),
+            )
+        elif task["pr_number"]:
+            # A resumed session finished without a new PR while a PR is
+            # already tracked — note it, keep the verified state.
+            add_evidence(
+                conn, task_id=task["id"], attempt_id=attempt_id,
+                mode=ctx.mode, kind="note",
+                title="Resumed session finished without a new PR",
+                body={"canonical_pr": task["pr_number"]},
+                synthetic=task["synthetic"] == 1,
             )
         else:
             transition_task(conn, task, "validation", "no_pr",
                             detail="session finished without a PR")
             transition_task(conn, get_task(conn, task["id"]), "disposition",
                             "blocked", detail="finished without a PR")
+
+
+_ACU_REFRESH_DELAY = 900.0
+_ACU_REFRESH_MAX_RETRIES = 4
 
 
 def _queue_acu_refresh(
@@ -245,25 +308,50 @@ def _queue_acu_refresh(
     attempt_id: int | None,
     session_id: str,
 ) -> None:
-    """Consumption settles after the session ends — schedule one delayed
-    refresh so the recorded spend reconciles to the billed value."""
+    """Consumption settles after the session ends — schedule a delayed
+    refresh so the recorded spend reconciles to the billed value. One
+    pending refresh per session; a *later* settle (resumed session) needs a
+    fresh key — dedup keys are permanent."""
+    if jobs.pending_exists(conn, "refresh_acu", "session_id", session_id):
+        return
     jobs.enqueue(
         conn, "refresh_acu",
         {"task_id": task_id, "attempt_id": attempt_id,
-         "session_id": session_id},
-        mode=mode, delay=900.0,
-        dedup_key=f"acuref:{mode}:{task_id}:{session_id}",
+         "session_id": session_id, "refresh_attempt": 0},
+        mode=mode, delay=_ACU_REFRESH_DELAY,
+        dedup_key=f"acuref:{mode}:{task_id}:{session_id}:{db.now()}",
     )
 
 
 def handle_refresh_acu(ctx: ServiceContext, job: sqlite3.Row) -> None:
     """Re-read a finished session's consumption and reconcile the attempt +
     consumed reservation upward when the billed total exceeds the recorded
-    one. Never writes down."""
+    one. Never writes down. Billing posts late, so a ``None`` read retries
+    a bounded number of times before being recorded honestly as
+    unavailable."""
     conn = ctx.conn
     payload = db.loads(job["payload_json"])
     usage = ctx.clients.devin.session_acu_usage(payload["session_id"])
     if usage is None:
+        attempt = int(payload.get("refresh_attempt", 0)) + 1
+        if attempt <= _ACU_REFRESH_MAX_RETRIES:
+            jobs.enqueue(
+                conn, "refresh_acu",
+                {**payload, "refresh_attempt": attempt},
+                mode=ctx.mode, delay=600.0,
+                dedup_key=(
+                    f"acuref:{ctx.mode}:{payload['task_id']}:"
+                    f"{payload['session_id']}:{db.now()}"
+                ),
+            )
+            return
+        audit(
+            conn, action="acu_unavailable", mode=ctx.mode,
+            task_id=payload["task_id"],
+            detail="consumption endpoint returned no usage after "
+                   f"{_ACU_REFRESH_MAX_RETRIES} refresh retries; recorded "
+                   "spend stays at last observed value",
+        )
         return
     with db.transaction(conn):
         if payload.get("attempt_id") is not None:

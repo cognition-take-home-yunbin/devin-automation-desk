@@ -28,6 +28,9 @@ SCENARIOS = (
     "approval-withdrawn",
     "snapshot-changed",
     "native-observe-failure",
+    "merged",
+    "closed-unmerged",
+    "review-decisions",
 )
 
 # Fixed, disjoint issue numbers keep repeated scenario runs idempotent.
@@ -43,10 +46,26 @@ _ISSUE = {
     "approval-withdrawn": 109,
     "snapshot-changed": 110,
     "native-observe-failure": 111,
+    "merged": 112,
+    "closed-unmerged": 113,
+    "review-decisions": 114,
 }
 
 WORKFLOW = "pilot-validation"
 CHECKS_OK = [("regression-test", "success"), ("lint", "success")]
+
+
+def _finished_pr_script(repo: str, issue_number: int, **extra) -> dict:
+    """A session script that finishes with a PR — the fake substitutes the
+    script wholesale, so PR fields must be explicit (absent = no PR)."""
+    pr = 1000 + issue_number
+    return {
+        "sequence": ["working", "finished"],
+        "pr_number": pr,
+        "pr_url": f"https://github.example.invalid/{repo}/pull/{pr}",
+        "pr_head_sha": f"simsha{pr:034d}"[:40],
+        **extra,
+    }
 
 
 def _seed_issue(
@@ -400,6 +419,61 @@ def seed_scenario(
             notes.append(
                 "native observation fails 3x; native_observe_error is set "
                 "and the dashboard marks the native feed unavailable"
+            )
+
+        elif scenario == "merged":
+            _seed_issue(
+                conn, repo, n,
+                "Heatmap legend clips at narrow widths",
+                labels=[cand, appr], approved_by=approver, approval_label=appr,
+                session_script=_finished_pr_script(
+                    repo, n,
+                    # Verification reads the PR twice (fetch + head recheck);
+                    # the first watcher read after delivery observes the
+                    # human merge.
+                    merged_after_reads=2,
+                    merged_by=approver,
+                ),
+            )
+            _seed_checks(conn, repo, n, CHECKS_OK)
+            notes.append(
+                "PR merges after delivery; the watcher must land "
+                "review=merged and republish the report"
+            )
+
+        elif scenario == "closed-unmerged":
+            _seed_issue(
+                conn, repo, n,
+                "Sunburst tooltip overflows the viewport",
+                labels=[cand, appr], approved_by=approver, approval_label=appr,
+                session_script=_finished_pr_script(
+                    repo, n, closed_after_reads=2,
+                ),
+            )
+            _seed_checks(conn, repo, n, CHECKS_OK)
+            notes.append(
+                "PR is closed unmerged after delivery; the watcher must "
+                "land review=closed_unmerged"
+            )
+
+        elif scenario == "review-decisions":
+            _seed_issue(
+                conn, repo, n,
+                "Sankey diagram drops zero-weight links",
+                labels=[cand, appr], approved_by=approver, approval_label=appr,
+                session_script=_finished_pr_script(
+                    repo, n,
+                    reviews=[
+                        {"state": "APPROVED", "author": "ops-lead"},
+                        {"state": "CHANGES_REQUESTED",
+                         "author": "maintainer"},
+                    ],
+                ),
+            )
+            _seed_checks(conn, repo, n, CHECKS_OK)
+            notes.append(
+                "reviews arrive after delivery; latest-per-author makes "
+                "changes_requested win over the earlier approval"
             )
 
         # Scan jobs dedupe at the task level, so a plain enqueue is correct —

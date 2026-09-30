@@ -15,6 +15,9 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_ALLOWED_APPROVERS", "ops-lead,dev-oncall")
     monkeypatch.setenv("SCAN_INTERVAL_SECONDS", "60")
     monkeypatch.setenv("POLL_INTERVAL_SECONDS", "15")
+    # Settle unsettled checks on the first verify run — tests that want the
+    # wait window opt in with dataclasses.replace on the settings object.
+    monkeypatch.setenv("VERIFICATION_PENDING_TIMEOUT_SECONDS", "0")
     monkeypatch.setenv("MAX_ACTIVE_SESSIONS", "1")
     monkeypatch.setenv(
         "VERIFICATION_POLICY_PATH",

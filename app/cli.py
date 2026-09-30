@@ -268,7 +268,7 @@ def cmd_verify_manual(args) -> int:
             conn, "publish_report", {"task_id": task["id"]},
             mode=settings.app_mode,
             dedup_key=f"report:{settings.app_mode}:{task['id']}:"
-                      f"{task['pr_number']}",
+                      f"{task['pr_number']}:{args.head_sha[:12]}",
             max_attempts=settings.job_max_attempts,
         )
     print(

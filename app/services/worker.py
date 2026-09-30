@@ -38,6 +38,7 @@ from . import (
     report_source,
     scanner,
     verification,
+    watch,
 )
 
 log = logging.getLogger("repairdesk.worker")
@@ -55,6 +56,7 @@ HANDLERS = {
     "retry_task": operator.handle_retry_task,
     "reconcile_task": operator.handle_reconcile_task,
     "observe_native": native.handle_observe,
+    "watch_prs": watch.handle_watch_prs,
     "verification_update": operator.handle_verification_update,
     status_labels.SYNC_JOB_KIND: label_sync.handle_sync,
 }
@@ -92,11 +94,9 @@ class Worker:
                 (ctx.mode,),
             ).fetchall()
             for r in rows:
-                jobs.enqueue(
-                    conn, "poll_session",
-                    {"task_id": r["id"], "session_id": r["devin_session_id"]},
+                jobs.enqueue_session_poll(
+                    conn, task_id=r["id"], session_id=r["devin_session_id"],
                     mode=ctx.mode, delay=self.settings.poll_interval_seconds,
-                    dedup_key=f"poll:{r['devin_session_id']}",
                     max_attempts=self.settings.job_max_attempts * 10,
                 )
             unknowns = conn.execute(
@@ -135,13 +135,18 @@ class Worker:
         last = row["last_scan_at"] if row else None
         if last is not None and db.now() - last < self.settings.scan_interval_seconds:
             return
-        pending = conn.execute(
-            "SELECT 1 FROM jobs WHERE kind = 'scan_issues' "
-            "AND status IN ('queued', 'claimed') LIMIT 1"
-        ).fetchone()
-        if pending:
-            return
-        jobs.enqueue(conn, "scan_issues", {"scheduled": True}, mode=ctx.mode)
+        # The PR watcher rides the scan cadence — delivered PRs are
+        # re-checked for merges, review decisions, and head moves on every
+        # scan tick. Each kind dedups on its own pending entry so a stalled
+        # scan can't starve the watcher (and vice versa).
+        for kind in ("scan_issues", "watch_prs"):
+            pending = conn.execute(
+                "SELECT 1 FROM jobs WHERE kind = ? "
+                "AND status IN ('queued', 'claimed') LIMIT 1",
+                (kind,),
+            ).fetchone()
+            if not pending:
+                jobs.enqueue(conn, kind, {"scheduled": True}, mode=ctx.mode)
 
     def _maybe_schedule_native_observe(self, ctx: ServiceContext) -> None:
         """Native report sessions are observed on the scan cadence — the

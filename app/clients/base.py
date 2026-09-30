@@ -80,7 +80,23 @@ class PullRequest:
     base_repo: str = ""       # repository the PR targets — out-of-scope when
                               # it isn't the configured repair repo
     head_repo: str = ""       # repository the head branch lives on
-    state: str = "open"
+    state: str = "open"       # open | closed — a merged PR reports "closed";
+                              # `merged` carries the distinction
+    merged: bool = False
+    merged_at: float | None = None
+    merged_by: str = ""
+
+
+@dataclass
+class PullReview:
+    """One submitted PR review — the unit the watcher aggregates into a
+    review-decision signal."""
+    repo: str
+    pr_number: int
+    state: str                # APPROVED | CHANGES_REQUESTED | COMMENTED |
+                              # DISMISSED | PENDING
+    author: str = ""
+    submitted_at: float = 0.0
 
 
 @dataclass
@@ -123,6 +139,9 @@ class GitHubClient(Protocol):
     def list_label_events(self, repo: str, number: int) -> list[LabelEvent]: ...
     def get_pull_request(self, repo: str, pr_number: int) -> PullRequest: ...
     def get_check_runs(self, repo: str, pr_number: int) -> list[CheckRun]: ...
+    def list_pr_reviews(
+        self, repo: str, pr_number: int
+    ) -> list[PullReview]: ...
     def update_issue_body(
         self, repo: str, number: int, body: str
     ) -> str: ...  # returns observed body hash

@@ -51,6 +51,53 @@ def enqueue(
         return None
 
 
+def pending_exists(
+    conn: sqlite3.Connection, kind: str, payload_field: str, value
+) -> bool:
+    """True when a job of ``kind`` carrying ``payload_field == value`` is
+    already queued or claimed — the check to run *before* re-enqueuing work
+    whose dedup key must stay unique (dedup keys are never reused: job rows
+    persist forever, so a static key would silently drop every enqueue after
+    the first lifecycle)."""
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE kind = ? AND status IN ('queued','claimed') "
+        "AND json_extract(payload_json, ?) = ? LIMIT 1",
+        (kind, f"$.{payload_field}", value),
+    ).fetchone()
+    return row is not None
+
+
+def enqueue_session_poll(
+    conn: sqlite3.Connection,
+    *,
+    task_id: int,
+    session_id: str,
+    mode: str,
+    delay: float,
+    max_attempts: int,
+    attempt_id: int | None = None,
+) -> int | None:
+    """(Re)arm the session poller.
+
+    A session can have several active lifecycles — the desk's own
+    verification update, an operator ``message``, or a human resuming the
+    kept session can all put it back to work after its first terminal state.
+    The old static dedup key ``poll:{session_id}`` made every re-enqueue a
+    silent no-op once the first poll job completed, so post-terminal work
+    (new commits, extra ACU) was never observed. The correct idempotency is
+    "one *pending* poll per session": skip when one is queued, otherwise
+    enqueue with a unique key."""
+    if pending_exists(conn, "poll_session", "session_id", session_id):
+        return None
+    payload = {"task_id": task_id, "session_id": session_id}
+    if attempt_id is not None:
+        payload["attempt_id"] = attempt_id
+    return enqueue(
+        conn, "poll_session", payload, mode=mode, delay=delay,
+        dedup_key=f"poll:{session_id}:{db.now()}", max_attempts=max_attempts,
+    )
+
+
 def claim(
     conn: sqlite3.Connection, lease_seconds: float, worker_id: str | None = None
 ) -> sqlite3.Row | None:

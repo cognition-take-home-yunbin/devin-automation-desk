@@ -76,6 +76,10 @@ class Settings:
     daily_admission_acu_limit: int
     project_admission_acu_limit: int
     poll_interval_seconds: float
+    # Checks may register late and run long — verification retries inside
+    # this window, then settles missing as failure and still-pending as
+    # unknown+blocked instead of retrying forever.
+    verification_pending_timeout_seconds: float
     dispatch_paused_on_first_start: bool
 
     report_github_repo: str
@@ -167,6 +171,9 @@ def load_settings(env: dict[str, str] | None = None, runtime_overrides: dict[str
             _get(raw, "PROJECT_ADMISSION_ACU_LIMIT", "180")
         ),
         poll_interval_seconds=float(_get(raw, "POLL_INTERVAL_SECONDS", "15")),
+        verification_pending_timeout_seconds=float(
+            _get(raw, "VERIFICATION_PENDING_TIMEOUT_SECONDS", "3600")
+        ),
         dispatch_paused_on_first_start=_get(
             raw, "DISPATCH_PAUSED_ON_FIRST_START", "false"
         ).lower()

@@ -25,6 +25,7 @@ from .base import (
     IssueNotFound,
     LabelEvent,
     PullRequest,
+    PullReview,
     RateLimited,
 )
 
@@ -167,7 +168,26 @@ class LiveGitHubClient:
             head_repo=((pr.get("head") or {}).get("repo") or {})
             .get("full_name") or "",
             state=pr.get("state") or "open",
+            merged=bool(pr.get("merged")),
+            merged_at=_parse_github_ts(pr.get("merged_at"))
+            if pr.get("merged_at") else None,
+            merged_by=((pr.get("merged_by") or {}).get("login") or ""),
         )
+
+    def list_pr_reviews(
+        self, repo: str, pr_number: int
+    ) -> list[PullReview]:
+        rows = self._paged_list(f"/repos/{repo}/pulls/{pr_number}/reviews", {})
+        return [
+            PullReview(
+                repo=repo,
+                pr_number=pr_number,
+                state=row.get("state") or "",
+                author=(row.get("user") or {}).get("login") or "",
+                submitted_at=_parse_github_ts(row.get("submitted_at")),
+            )
+            for row in rows
+        ]
 
     def get_check_runs(self, repo: str, pr_number: int) -> list[CheckRun]:
         head_sha = self.get_pull_request(repo, pr_number).head_sha
