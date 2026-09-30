@@ -15,7 +15,13 @@ from __future__ import annotations
 import sqlite3
 
 from .. import db
-from ..transitions import add_evidence, audit, get_task, transition_task
+from ..transitions import (
+    add_evidence,
+    advance_review,
+    audit,
+    get_task,
+    transition_task,
+)
 from .context import ServiceContext
 from .policy import load_policy
 from . import jobs
@@ -39,6 +45,16 @@ def _fail(
     uri: str | None = None,
 ) -> None:
     task = get_task(ctx.conn, task["id"])
+    if task["validation"] == "verified":
+        # A verify job enqueued before the task verified (or for an older
+        # head) can still observe failing runs — the verified state wins;
+        # the watcher re-opens validation on a real head move.
+        audit(
+            ctx.conn, action="fail_suppressed", mode=ctx.mode,
+            task_id=task["id"],
+            detail=f"task already verified — stale failure signal: {detail}",
+        )
+        return
     transition_task(ctx.conn, task, "validation", "checks_failed",
                     detail=detail)
     transition_task(ctx.conn, get_task(ctx.conn, task["id"]),
@@ -98,6 +114,27 @@ def handle_verify(ctx: ServiceContext, job: sqlite3.Row) -> None:
     if head_sha and head_sha != task["head_sha"]:
         conn.execute("UPDATE tasks SET head_sha = ? WHERE id = ?",
                      (head_sha, task["id"]))
+
+    # Terminal PR state is a fact *now* — land it on review before evaluating
+    # checks so every outcome (verified or failed) carries it.
+    if pr.state == "closed":
+        target = "merged" if pr.merged else "closed_unmerged"
+        task = advance_review(
+            conn, task, target,
+            detail=("merged by " + (pr.merged_by or "a human"))
+            if pr.merged else "PR closed without merging",
+        )
+        add_evidence(
+            conn, task_id=task["id"], mode=ctx.mode, kind="review",
+            title=(f"PR merged by {pr.merged_by}"
+                   if pr.merged and pr.merged_by
+                   else "PR merged" if pr.merged
+                   else "PR closed without merging"),
+            body={"pr_number": pr.number, "pr_url": pr.url,
+                  "merged_by": pr.merged_by, "merged_at": pr.merged_at},
+            uri=pr.url, synthetic=task["synthetic"] == 1,
+            verifier=VERIFIER_INDEPENDENT,
+        )
 
     # -- checks on the fetched head (client paginates) -----------------------
     runs = ctx.clients.github.get_check_runs(task["repo"], pr_number)
@@ -188,12 +225,7 @@ def handle_verify(ctx: ServiceContext, job: sqlite3.Row) -> None:
                             "blocked")
         return
 
-    if pending:
-        raise jobs.RetryLater(
-            s.poll_interval_seconds, f"checks pending: {pending}"
-        )
-
-    if missing or failed or untrusted:
+    if failed or untrusted:
         _fail(
             ctx, task,
             detail=f"missing={missing} failed={failed} untrusted={untrusted}",
@@ -205,6 +237,41 @@ def handle_verify(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 "runs": _runs_payload(runs),
             },
         )
+        return
+
+    if missing or pending:
+        # CI registers check runs moments after a PR opens, and long suites
+        # need time — so unsettled checks retry inside a settle window
+        # anchored at this verify job's creation. Past the window, a
+        # required check that never posted is a failure; checks still
+        # running are honest unknowns for an operator, not an infinite loop.
+        deadline = (float(job["created_at"])
+                    + s.verification_pending_timeout_seconds)
+        if db.now() < deadline:
+            raise jobs.RetryLater(
+                s.poll_interval_seconds,
+                f"checks unsettled: missing={missing} pending={pending}",
+            )
+        if missing:
+            _fail(
+                ctx, task,
+                detail=f"required checks never posted: {missing}",
+                body={
+                    "missing": missing, "pending": pending,
+                    "head_sha": head_sha,
+                    "agent_claimed_head": agent_claimed_head,
+                    "flags": workflow_changes,
+                    "runs": _runs_payload(runs),
+                },
+            )
+        else:
+            transition_task(
+                conn, get_task(conn, task["id"]), "validation", "unknown",
+                detail=f"checks still pending past settle window: {pending}; "
+                       "operator review required",
+            )
+            transition_task(conn, get_task(conn, task["id"]), "disposition",
+                            "blocked")
         return
 
     with db.transaction(conn):
@@ -226,14 +293,22 @@ def handle_verify(ctx: ServiceContext, job: sqlite3.Row) -> None:
             synthetic=task["synthetic"] == 1, verifier=VERIFIER_INDEPENDENT,
         )
         task = get_task(conn, task["id"])
-        transition_task(conn, task, "review", "awaiting_review",
-                        detail="verified PR awaiting human review")
-        task = get_task(conn, task["id"])
+        if task["review"] not in ("merged", "closed_unmerged"):
+            # Terminal PR state landed above for a PR already closed at
+            # verify time — the human outcome outranks the awaiting flag.
+            transition_task(conn, task, "review", "awaiting_review",
+                            detail="verified PR awaiting human review")
+            task = get_task(conn, task["id"])
         transition_task(conn, task, "disposition", "delivered")
         jobs.enqueue(
             conn, "publish_report", {"task_id": task["id"]},
             mode=ctx.mode,
-            dedup_key=f"report:{ctx.mode}:{task['id']}:{task['pr_number']}",
+            # Head-scoped so a re-verified push republishes — the static
+            # key dedups away every publish after the first lifecycle.
+            dedup_key=(
+                f"report:{ctx.mode}:{task['id']}:{task['pr_number']}:"
+                f"{(head_sha or '')[:12]}"
+            ),
             max_attempts=s.job_max_attempts,
         )
         # One budgeted factual update to the repair session asking it to

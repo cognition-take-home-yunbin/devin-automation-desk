@@ -108,6 +108,11 @@ flowchart LR
     VER -->|stale head SHA| STALE[bounded requeue →<br/>validation=unknown]
     DONE --> PUB[publish_report<br/>report_source] --> RPT[(report_snapshots +<br/>publication_records)]
 
+    SCAN -. cadence .-> WATCH[watch_prs<br/>post-delivery watcher]
+    WATCH -->|PR merged/closed| MREV[review=merged / closed_unmerged<br/>→ republish report]
+    WATCH -->|GH review decision| DREV[review=approved / changes_requested<br/>→ republish report]
+    WATCH -->|head moved| VER
+
     J -.claims.-> SCAN
     J -.claims.-> DISP
     J -.claims.-> REC
@@ -137,7 +142,12 @@ native conversation" never tangles with the task outcome.
   never success, and a verified PR re-opens to checks_pending on a
   new head push.
 - **review**: unknown → awaiting_review → changes_requested / approved →
-  merged / closed_unmerged.
+  merged / closed_unmerged. Post-delivery facts are landed by the
+  `watch_prs` job, scheduled beside `scan_issues` on the scan cadence: it
+  polls every task with a PR whose review is still open, lands merges,
+  closes, and aggregated review decisions (latest substantive review per
+  author), and re-opens validation when the head moves — each landing
+  republishes the report with an outcome-scoped dedup key.
 - **disposition**: active → delivered / blocked / failed / cancelled.
 
 ## Live vs simulation
@@ -164,9 +174,12 @@ raise.
 - **Reservation accounting**: `held` at dispatch → `consumed` with observed
   usage at terminal, or `released` on throttle/no-create. Usage comes from
   the per-session consumption endpoint (`acus_consumed` on the session
-  record stays 0.0), reconciled once more ~15 min post-terminal by the
-  `refresh_acu` job. Caps check `held + consumed` — never just dispensed
-  session IDs.
+  record stays 0.0), reconciled ~15 min post-terminal by the
+  `refresh_acu` job — a `None` consumption read retries boundedly (4 ×
+  10 min), then the audit trail records `acu_unavailable` rather than a
+  silent gap; a resumed session's later settle schedules a fresh refresh
+  via a unique dedup key. Caps check `held + consumed` — never just
+  dispensed session IDs.
 - Polling preserves unfamiliar statuses instead of forcing failure/success.
 - **Independent verification (F09)**: the verifier confirms the PR targets
   the configured repo + base branch (out-of-scope targets → flag +

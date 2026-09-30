@@ -170,11 +170,9 @@ def handle_dispatch(ctx: ServiceContext, job: sqlite3.Row) -> None:
         audit(conn, action="dispatch_reattach", mode=ctx.mode,
               task_id=task["id"],
               detail=f"session {task['devin_session_id']} already recorded")
-        jobs.enqueue(
-            conn, "poll_session",
-            {"task_id": task["id"], "session_id": task["devin_session_id"]},
+        jobs.enqueue_session_poll(
+            conn, task_id=task["id"], session_id=task["devin_session_id"],
             mode=ctx.mode, delay=s.poll_interval_seconds,
-            dedup_key=f"poll:{task['devin_session_id']}",
             max_attempts=s.job_max_attempts * 10,
         )
         return
@@ -308,12 +306,10 @@ def handle_dispatch(ctx: ServiceContext, job: sqlite3.Row) -> None:
             kind="session", title=f"Devin session {session.session_id} created",
             uri=session.url, synthetic=task["synthetic"] == 1,
         )
-        jobs.enqueue(
-            conn, "poll_session",
-            {"task_id": task["id"], "session_id": session.session_id,
-             "attempt_id": attempt_id},
+        jobs.enqueue_session_poll(
+            conn, task_id=task["id"], session_id=session.session_id,
+            attempt_id=attempt_id,
             mode=ctx.mode, delay=s.poll_interval_seconds,
-            dedup_key=f"poll:{session.session_id}",
             max_attempts=s.job_max_attempts * 10,
         )
 
@@ -357,10 +353,8 @@ def handle_reconcile(ctx: ServiceContext, job: sqlite3.Row) -> None:
                         action="creation_reconciled",
                         detail=f"reattached session {session.session_id} via "
                                "correlation tag")
-        jobs.enqueue(
-            conn, "poll_session",
-            {"task_id": task["id"], "session_id": session.session_id},
+        jobs.enqueue_session_poll(
+            conn, task_id=task["id"], session_id=session.session_id,
             mode=ctx.mode, delay=s.poll_interval_seconds,
-            dedup_key=f"poll:{session.session_id}",
             max_attempts=s.job_max_attempts * 10,
         )

@@ -116,7 +116,7 @@ Flat status would hide “agent finished but checks failed.” Each task tracks:
 | --- | --- |
 | **execution** | queued → working → agent_finished / needs_input / failed / stopped |
 | **validation** | no_pr → checks_pending → verified / checks_failed / manually_verified |
-| **review** | awaiting_review → merged _(modelled; merge watching not yet automated)_ |
+| **review** | awaiting_review → approved / changes_requested → merged / closed_unmerged — landed by the `watch_prs` poller on the scan cadence |
 | **disposition** | active → delivered / blocked / failed / cancelled / deleted |
 
 Plus a **cleanup** ledger (`kept` vs `terminated`) so retaining a session for Slack/verification update does not tangle with outcome.
@@ -393,7 +393,7 @@ Fill with **observed** links after real runs (session URLs may need org access; 
 
 ## Current limitations
 
-- Review/merge watching is modelled but not automated — `merged_prs` stays 0 until a poller exists.
+- PR watching polls on the scan cadence (no webhook support): merges, review decisions, and head pushes post-delivery land within one `SCAN_INTERVAL_SECONDS` — a merged report column is only as fresh as the last tick. Label state on a merged/closed PR still reads `devin-succeeded` — the desk delivered; adoption is the reviewer's call.
 - Native Slack sync for API-created sessions must be validated per org ([`docs/native-slack-sync.md`](docs/native-slack-sync.md)); until then `slack-link` is the bridge.
 - ACU consumption APIs (org daily + per-session) may be unavailable without the scope → local reservation ledger for caps, and per-repair spend shows "unknown" — never a false $0.
 - Daily Slack digest schedule/delivery is owned by the external Devin Automation; this app only publishes facts and observes tagged sessions.

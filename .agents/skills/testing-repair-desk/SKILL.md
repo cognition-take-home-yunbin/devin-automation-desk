@@ -14,7 +14,8 @@ description: How to run and end-to-end test the Devin Repair Desk dashboard in s
 
 ## Fresh-lifecycle demo requires a DB reset
 
-- Each UI scenario button POSTs `/api/simulation/scenarios` and seeds a **fixed** issue number (happy-path=101, needs-input=102, checks-failed=103, creation-unknown=104, throttled=105, stale-checks=106, report-failure=107, duplicate-scan=108). Seeding is `INSERT OR IGNORE` — re-running a scenario **dedupes silently**; no new task, no visible change.
+- Each UI scenario button POSTs `/api/simulation/scenarios` and seeds a **fixed** issue number (happy-path=101, needs-input=102, checks-failed=103, creation-unknown=104, throttled=105, stale-checks=106, report-failure=107, duplicate-scan=108, approval-withdrawn=109, snapshot-changed=110, native-observe-failure=111, merged=112, closed-unmerged=113, review-decisions=114). Seeding is `INSERT OR IGNORE` — re-running a scenario **dedupes silently**; no new task, no visible change.
+- Post-delivery review states land via the `watch_prs` job, scheduled on the scan cadence (~15s in sim): `merged`/`closed-unmerged` flip the PR closed after verification's two reads; `review-decisions` seeds APPROVED + CHANGES_REQUESTED reviews — latest-per-author wins (changes_requested). The watcher's merge/close/decision then republishes the report.
 - To watch a scenario progress live, reset first: `docker compose down -v && docker compose up -d` (image persists; SQLite volume is recreated empty; schema auto-inits on boot).
 - Nothing auto-seeds at startup — tasks exist only after someone launches a scenario (UI button or `cli simulate`).
 

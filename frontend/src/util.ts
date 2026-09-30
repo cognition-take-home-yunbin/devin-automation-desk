@@ -106,6 +106,9 @@ export const DIMENSION_HELP: Record<string, string> = {
 export function describeTask(t: TaskSummary): { headline: string; tone: Tone } {
   if (t.disposition === "deleted") return { headline: "Removed from tracking", tone: "dim" };
   if (t.review === "merged") return { headline: "Merged by a human reviewer", tone: "ok" };
+  if (t.review === "closed_unmerged") return { headline: "PR closed without merging", tone: "bad" };
+  if (t.review === "approved") return { headline: "Approved by a human reviewer", tone: "ok" };
+  if (t.review === "changes_requested") return { headline: "Reviewer requested changes", tone: "warn" };
   if (t.validation === "verified")
     return { headline: "PR independently verified · awaiting human review", tone: "ok" };
   if (t.validation === "manually_verified")

@@ -64,6 +64,31 @@ def transition_task(
     return task
 
 
+def advance_review(
+    conn: sqlite3.Connection,
+    task: sqlite3.Row,
+    target: str,
+    *,
+    action: str = "state_transition",
+    detail: str | None = None,
+) -> sqlite3.Row:
+    """Drive ``review`` to ``target`` along the legal path.
+
+    Terminal PR facts (merged/closed_unmerged) and review decisions can
+    arrive while review sits anywhere non-terminal — e.g. ``unknown`` or
+    ``changes_requested`` — so the transition runs through
+    ``awaiting_review`` first when the map requires it. Already-terminal
+    review states are left alone (returns the task unchanged)."""
+    current = task["review"]
+    if current == target or current in ("merged", "closed_unmerged"):
+        return task
+    if current in ("unknown", "changes_requested"):
+        task = transition_task(conn, task, "review", "awaiting_review",
+                               detail=detail)
+    return transition_task(conn, task, "review", target,
+                           action=action, detail=detail)
+
+
 def request_label_sync(
     conn: sqlite3.Connection, task: sqlite3.Row
 ) -> None:

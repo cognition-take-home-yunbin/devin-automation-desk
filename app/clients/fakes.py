@@ -25,6 +25,7 @@ from .base import (
     IssueNotFound,
     LabelEvent,
     PullRequest,
+    PullReview,
     RateLimited,
 )
 
@@ -136,6 +137,25 @@ class FakeGitHubClient:
             (repo, pr_number),
         ).fetchone()
         script = db.loads(r["script_json"], {}) if r else {}
+        # Read counting lets a scenario flip PR state mid-flow — e.g.
+        # merged_after_reads: verification reads the head twice while the PR
+        # is still open, then the watcher's next read observes the merge.
+        reads = int(script.get("pr_reads", 0)) + 1
+        script["pr_reads"] = reads
+        if r is not None:
+            self.conn.execute(
+                "UPDATE sim_sessions SET script_json = ? WHERE id = ?",
+                (db.dumps(script), r["id"]),
+            )
+        state = script.get("pr_state", "open")
+        merged = bool(
+            script.get("merged")
+            or reads > int(script.get("merged_after_reads", 1 << 30))
+        )
+        if merged or reads > int(
+            script.get("closed_after_reads", 1 << 30)
+        ):
+            state = "closed"
         sha = script.get("pr_head_sha", f"simsha{pr_number:034d}"[:40])
         seq = script.get("pr_head_sha_seq") or []
         if seq:
@@ -156,8 +176,32 @@ class FakeGitHubClient:
             base_repo=script.get("base_repo", repo),
             head_sha=sha,
             head_repo=script.get("head_repo", repo),
-            state="open",
+            state=state,
+            merged=merged,
+            merged_at=db.now() if merged else None,
+            merged_by=script.get("merged_by", "sim-reviewer") if merged else "",
         )
+
+    def list_pr_reviews(
+        self, repo: str, pr_number: int
+    ) -> list[PullReview]:
+        r = self.conn.execute(
+            """SELECT s.* FROM sim_sessions s
+               JOIN tasks t ON t.devin_session_id = s.session_id
+               WHERE t.repo = ? AND t.pr_number = ?""",
+            (repo, pr_number),
+        ).fetchone()
+        script = db.loads(r["script_json"], {}) if r else {}
+        return [
+            PullReview(
+                repo=repo,
+                pr_number=pr_number,
+                state=rv.get("state", ""),
+                author=rv.get("author", "sim-reviewer"),
+                submitted_at=rv.get("submitted_at", db.now()),
+            )
+            for rv in script.get("reviews", [])
+        ]
 
     def get_check_runs(self, repo: str, pr_number: int) -> list[CheckRun]:
         _raise_if_scripted(self.conn, "github.get_check_runs")

@@ -36,6 +36,9 @@ const SCENARIOS = [
   "approval-withdrawn",
   "snapshot-changed",
   "native-observe-failure",
+  "merged",
+  "closed-unmerged",
+  "review-decisions",
 ];
 
 // Mirrors _UNDELETABLE_EXECUTIONS on the API — a session/dispatch may

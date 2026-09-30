@@ -77,7 +77,8 @@ def handle_observe(ctx: ServiceContext, job: sqlite3.Row) -> None:
                 conn.execute(
                     """UPDATE native_sessions
                        SET url = ?, status = ?, status_detail = ?,
-                           acu_used = ?, last_seen_at = ?
+                           acu_used = COALESCE(?, acu_used),
+                           last_seen_at = ?
                        WHERE id = ?""",
                     (
                         sess.url, sess.status, sess.status_detail,

@@ -89,7 +89,9 @@ ALLOWED: dict[str, dict[str, tuple[str, ...]]] = {
             "merged",
             "closed_unmerged",
         ),
-        "changes_requested": ("awaiting_review", "closed_unmerged"),
+        # A PR with requested changes can still be merged by a human —
+        # the map must not pretend otherwise.
+        "changes_requested": ("awaiting_review", "merged", "closed_unmerged"),
         "approved": ("merged", "closed_unmerged"),
         "merged": (),
         "closed_unmerged": (),
