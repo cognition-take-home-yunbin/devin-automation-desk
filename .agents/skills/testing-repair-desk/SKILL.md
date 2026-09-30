@@ -7,15 +7,35 @@ description: How to run and end-to-end test the Devin Repair Desk dashboard in s
 
 ## Stack
 
-- Simulation mode needs no credentials: `.env` with `APP_MODE=simulation` + `COMPOSE_PROJECT_NAME=repairdesk-sim`.
+- Simulation mode needs no credentials, but `.env` needs more than `APP_MODE=simulation` for scenarios to produce tasks:
+  - `GITHUB_REPO=<any value>` — REQUIRED. Fallbacks differ: `simulator.seed_scenario` seeds issues under `acme/superset-demo` while `scanner.handle_scan` lists `example/superset-demo`; unset = `candidates=0` forever.
+  - `GITHUB_ALLOWED_APPROVERS=<any login>` — REQUIRED. The scanner gates on `approval_event.actor in allowed_approvers`; the seeder uses the first entry as the approval actor (fallback `ops-lead`). Empty = `approval_insufficient` audits, no tasks.
+  - `COMPOSE_PROJECT_NAME=repairdesk-sim`, `APP_MODE=simulation`.
+  - For lively demos: `SCAN_INTERVAL_SECONDS=15`, `POLL_INTERVAL_SECONDS=1`.
 - `docker compose up --build -d`; UI + API served by the one container at `http://127.0.0.1:8000`. Frontend is a prebuilt SPA baked into the image (`STATIC_DIR=/app/frontend/dist`).
 - Health: `curl http://127.0.0.1:8000/healthz` → `{"status":"ok","mode":"simulation"}`.
 - CLI inside the container: `docker compose exec -T app python -m app.cli doctor|tasks|reports|pause|unpause|simulate <scenario>|export-evidence`.
 
+## Native fallback when Docker Hub rate-limits (429)
+
+`docker compose up --build` can fail on `registry-1.docker.io ... 429 Too Many Requests`. The same app runs natively — identical FastAPI + embedded worker, no container:
+
+- `cd frontend && npm ci && npm run build` (dist is gitignored — always rebuild when the PR touches `frontend/src`).
+- From repo root: `APP_MODE=simulation GITHUB_REPO=acme/superset-demo GITHUB_BASE_BRANCH=master GITHUB_ALLOWED_APPROVERS=ops-lead DATABASE_PATH=/tmp/repairdesk-sim.sqlite VERIFICATION_POLICY_PATH=config/verification.yaml STATIC_DIR=frontend/dist POLL_INTERVAL_SECONDS=1 SCAN_INTERVAL_SECONDS=15 WORKER_IDLE_SECONDS=1 python3 -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000`
+- Use `python3 -m uvicorn` (pyenv), NOT a stray `uvicorn` binary — `~/.local/bin/uvicorn` may belong to a different Python lacking fastapi.
+- Fresh lifecycle = delete the sqlite file + restart (no volume needed).
+- Kill by port, not `pkill -f "uvicorn app.main"` — the pattern matches your own shell's command line and kills it. `ss -tlnp | grep :8000` → kill the PID.
+- Worker runs as an in-process asyncio task; jobs land in the same sqlite — query `DATABASE_PATH` directly to inspect jobs/audits.
+
+## Scan cadence drives the PR watcher — "Scan now" does NOT
+
+- `watch_prs` is enqueued beside `scan_issues` only when `_maybe_schedule_scan` finds `control.last_scan_at` older than `SCAN_INTERVAL_SECONDS`; `handle_scan` re-stamps `last_scan_at` on completion.
+- The "Scan now" button (`POST /api/scan`) enqueues `scan_issues` ONLY — it can never trigger the watcher, and its completion re-anchors the cadence (it can *delay* the next watch tick, not hurry it). To observe post-delivery facts just wait ~1 scan interval after `delivered`. Same for `cli scan now`.
+
 ## Fresh-lifecycle demo requires a DB reset
 
 - Each UI scenario button POSTs `/api/simulation/scenarios` and seeds a **fixed** issue number (happy-path=101, needs-input=102, checks-failed=103, creation-unknown=104, throttled=105, stale-checks=106, report-failure=107, duplicate-scan=108, approval-withdrawn=109, snapshot-changed=110, native-observe-failure=111, merged=112, closed-unmerged=113, review-decisions=114). Seeding is `INSERT OR IGNORE` — re-running a scenario **dedupes silently**; no new task, no visible change.
-- Post-delivery review states land via the `watch_prs` job, scheduled on the scan cadence (~15s in sim): `merged`/`closed-unmerged` flip the PR closed after verification's two reads; `review-decisions` seeds APPROVED + CHANGES_REQUESTED reviews — latest-per-author wins (changes_requested). The watcher's merge/close/decision then republishes the report.
+- Post-delivery review states land via the `watch_prs` job on the scan cadence (~15s in sim): `merged`/`closed-unmerged` flip the PR closed on the 3rd PR read (`merged_after_reads`/`closed_after_reads`=2; verify reads the PR twice, so the watcher's first read after delivery is #3); `review-decisions` seeds APPROVED(ops-lead)+CHANGES_REQUESTED(maintainer) reviews — latest-substantive-per-author wins (changes_requested). Each landed outcome republishes the report.
 - To watch a scenario progress live, reset first: `docker compose down -v && docker compose up -d` (image persists; SQLite volume is recreated empty; schema auto-inits on boot).
 - Nothing auto-seeds at startup — tasks exist only after someone launches a scenario (UI button or `cli simulate`).
 
@@ -38,6 +58,8 @@ description: How to run and end-to-end test the Devin Repair Desk dashboard in s
 - Quick filter tabs (All / In progress / Needs attention / Delivered / Ended) plus an "Any state" select filter rows across all 4 dimensions; both compose.
 - needs_input evidence carries the scripted question (e.g. "Which baseline SHA should I use?").
 - Row Links column shows a `slack` anchor when `slack_link` is set; drawer has a `Cleanup` chip (pending/kept/terminated) + `Slack` field.
+- Headlines for post-delivery states (util.ts `describeTask`): merged → "Merged by a human reviewer" (ok); closed_unmerged → "PR closed without merging" (bad); approved → "Approved by a human reviewer" (ok); changes_requested → "Reviewer requested changes" (warn).
+- Scenario chip clicks: the browser window needs focus or the first click only focuses it — click once, then again / press Enter. Chips are `<button>`; read `getBoundingClientRect` via the app tab's console if coordinates seem off.
 
 ## Operator CLI flows (milestone B)
 
